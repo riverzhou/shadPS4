@@ -126,7 +126,9 @@ public:
     void ReserveCopyBufferSpace() {
         GpuQueue& gfx_queue = mapped_queues[GfxQueueId];
         std::scoped_lock lk(gfx_queue.m_access);
-        constexpr size_t GfxReservedSize = 2_MB >> 2;
+        // The arena is only rewound when no submission is in flight, so it has to absorb every
+        // submission of a long uninterrupted stretch; 32 MiB keeps that from ever overflowing.
+        constexpr size_t GfxReservedSize = 32_MB >> 2;
         gfx_queue.ccb_buffer.reserve(GfxReservedSize);
         gfx_queue.dcb_buffer.reserve(GfxReservedSize);
     }

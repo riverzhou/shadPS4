@@ -1266,7 +1266,7 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     // The copied command buffers are shared by every in-flight submission, so account the
     // submission before anything (SubmitDone) can reset the copy offsets, and keep the copy and
     // the accounting under the same lock.
-    std::scoped_lock submit_lock{submit_mutex};
+    std::unique_lock submit_lock{submit_mutex};
     if (EmulatorSettings.IsCopyGpuBuffers()) {
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
     }
