@@ -251,6 +251,21 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
 
+    if (regs.num_indices <= 4 && std::getenv("SHADPS4_LOG_FULLSCREEN_DRAWS") != nullptr) {
+        static std::atomic<u32> fs_log{0};
+        if (fs_log.fetch_add(1, std::memory_order_relaxed) < 40) {
+            const auto& dyn = scheduler.GetDynamicState();
+            const auto& vp = dyn.viewports.front();
+            const auto& sc = dyn.scissors.front();
+            LOG_INFO(Render_Vulkan,
+                     "Fullscreen draw idx={} pipeline={:#x} clip_disabled={} viewport=({},{},{}x{}) "
+                     "scissor=({},{},{}x{})",
+                     regs.num_indices, reinterpret_cast<u64>(pipeline), regs.IsClipDisabled(), vp.x,
+                     vp.y, vp.width, vp.height, sc.offset.x, sc.offset.y, sc.extent.width,
+                     sc.extent.height);
+        }
+    }
+
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();
     const auto [vertex_offset, instance_offset] = GetDrawOffsets(regs, vs_info, fetch_shader);

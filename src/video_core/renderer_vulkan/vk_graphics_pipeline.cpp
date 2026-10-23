@@ -41,8 +41,14 @@ GraphicsPipeline::GraphicsPipeline(
 
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
-    LOG_INFO(Render_Vulkan, "GraphicsPipeline ptr={:#x} vs={:#x} fs={:#x}",
-             reinterpret_cast<uintptr_t>(this), key.stage_hashes[0], key.stage_hashes[1]);
+    LOG_INFO(Render_Vulkan,
+             "GraphicsPipeline ptr={:#x} fs={:#x} tcs={:#x} tes={:#x} vs={:#x} gs={:#x}",
+             reinterpret_cast<uintptr_t>(this),
+             key.stage_hashes[u32(Shader::SwStage::Fragment)],
+             key.stage_hashes[u32(Shader::SwStage::TessellationControl)],
+             key.stage_hashes[u32(Shader::SwStage::TessellationEval)],
+             key.stage_hashes[u32(Shader::SwStage::Vertex)],
+             key.stage_hashes[u32(Shader::SwStage::Geometry)]);
     BuildDescSetLayout(preloading);
     const auto debug_str = GetDebugString();
 
