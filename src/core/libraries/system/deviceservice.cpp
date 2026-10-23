@@ -4,8 +4,13 @@
 #include "core/libraries/system/deviceservice.h"
 
 #include <atomic>
+#include <cstdlib>
 
 #include "common/logging/log.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 
@@ -22,10 +27,36 @@ s32 PS4_SYSV_ABI sceDeviceServiceInitialize() {
 
 s32 PS4_SYSV_ABI sceDeviceServiceGetEventState(u64 arg0, u64 arg1, u64 arg2, u64 arg3, u64 arg4,
                                                u64 arg5) {
+    // Experiment switch: the title passes a zeroed state structure and polls it; filling it with
+    // a "device present" value tells whether it is what unblocks the caller.
+    static const u32 state_value = [] {
+        const char* env = std::getenv("SHADPS4_DEVICE_STATE_VALUE");
+        return env != nullptr ? static_cast<u32>(std::strtoul(env, nullptr, 0)) : 0u;
+    }();
+    if (state_value != 0 && arg1 >= 0x10000 && arg1 < 0x100000000ull) {
+#ifdef _WIN32
+        __try {
+            *reinterpret_cast<u32*>(arg1) = state_value;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+#endif
+    }
     static std::atomic<u32> logged{0};
     if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
-        LOG_INFO(Lib_SystemService, "sceDeviceServiceGetEventState({:#x}, {:#x}, {:#x}, {:#x})",
-                 arg0, arg1, arg2, arg3);
+        u32 state[2]{};
+#ifdef _WIN32
+        if (arg1 >= 0x10000 && arg1 < 0x100000000ull) {
+            __try {
+                state[0] = *reinterpret_cast<const u32*>(arg1);
+                state[1] = *(reinterpret_cast<const u32*>(arg1) + 1);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                state[0] = 0xdeadbeef;
+            }
+        }
+#endif
+        LOG_INFO(Lib_SystemService,
+                 "sceDeviceServiceGetEventState({:#x}, {:#x}, {:#x}, {:#x}) state={:#x},{:#x}",
+                 arg0, arg1, arg2, arg3, state[0], state[1]);
     }
     return ORBIS_OK;
 }
