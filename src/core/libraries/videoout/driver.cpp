@@ -256,6 +256,14 @@ void VideoOutDriver::Flip(const Request& req) {
         --flip_status.flip_pending_num;
     }
 
+    if (std::getenv("SHADPS4_LOG_VO_EVENTS") != nullptr) {
+        static std::atomic<u32> flip_log{0};
+        if (flip_log.fetch_add(1, std::memory_order_relaxed) % 30 == 0) {
+            LOG_INFO(Lib_VideoOut, "flip event #{} (events {})", flip_log.load(),
+                     port->flip_events.size());
+        }
+    }
+
     // Trigger flip events for the port.
     for (auto event : port->flip_events) {
         auto equeue = Kernel::GetEqueue(event);
@@ -385,6 +393,14 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         {
             // Needs lock here as can be concurrently read by `sceVideoOutGetVblankStatus`
             std::scoped_lock lock{main_port.vo_mutex};
+
+            if (std::getenv("SHADPS4_LOG_VO_EVENTS") != nullptr) {
+                static std::atomic<u32> vblank_log{0};
+                if (vblank_log.fetch_add(1, std::memory_order_relaxed) % 120 == 0) {
+                    LOG_INFO(Lib_VideoOut, "vblank event #{} (events {})", vblank_log.load(),
+                             main_port.vblank_events.size());
+                }
+            }
 
             // Trigger flip events for the port
             for (auto event : main_port.vblank_events) {
