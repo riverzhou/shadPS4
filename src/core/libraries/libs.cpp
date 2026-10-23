@@ -204,7 +204,11 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
         // The device-service exports live in libSceMbus, which is loaded as an LLE module, but
         // that module does not export them; register the HLE implementation unconditionally so
         // titles that poll it get a real answer instead of a zero-returning stub.
-        Libraries::DeviceService::RegisterLib(sym);
+        // SHADPS4_DEVICE_SERVICE_STUB=1 keeps the old stub path, which is useful while checking
+        // whether the faster HLE path changes a title's timing.
+        if (std::getenv("SHADPS4_DEVICE_SERVICE_STUB") == nullptr) {
+            Libraries::DeviceService::RegisterLib(sym);
+        }
 
         for (auto mod : ModulesToLoad) {
             if (mod.module_name == "libSceGnmDriver.sprx") {
