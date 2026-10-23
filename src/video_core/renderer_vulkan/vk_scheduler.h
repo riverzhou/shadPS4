@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -452,12 +453,17 @@ private:
 
     void SubmitExecution(SubmitInfo& info);
 
+    void StartSubmitWatchdog();
+
     void PriorityPendingOpsThread(std::stop_token stoken);
 
 private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    u32 trace_id{};
+    u64 last_submit_op{};
+    std::array<std::atomic<u64>, 1024> submit_time_ns{};
     DynamicState dynamic_state;
     SessionFunc on_session{};
     SubmitFunc on_submit{};

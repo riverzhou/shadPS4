@@ -586,8 +586,16 @@ struct AddressSpace::Impl {
         }
 
         const VAddr virtual_end = virtual_addr + size;
-        auto it = --regions.upper_bound(virtual_addr);
-        ASSERT_MSG(it != regions.end(), "addr {:#x} out of bounds", virtual_addr);
+        auto it = regions.upper_bound(virtual_addr);
+        if (it == regions.begin()) {
+            // Addresses below every tracked region belong to unmapped guest memory (for example a
+            // buffer whose base address was decoded as zero); leave their protection untouched
+            // instead of asserting on an address the guest never mapped.
+            LOG_WARNING(Core, "Ignoring protection change for unmapped address {:#x}, size {}",
+                        virtual_addr, size);
+            return;
+        }
+        --it;
         for (; it->first < virtual_end; it++) {
             if (!it->second.is_mapped) {
                 continue;

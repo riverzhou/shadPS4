@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
+
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -15,12 +18,16 @@ std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    static std::atomic<u32> next_trace_id{0};
+    trace_id = next_trace_id.fetch_add(1, std::memory_order_relaxed);
+    last_submit_op = VideoCore::GpuTrace::write_pos.load(std::memory_order_relaxed);
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
     BeginSession();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
+    StartSubmitWatchdog();
 }
 
 Scheduler::~Scheduler() {
@@ -238,12 +245,32 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
-    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Submit, cmd_buffers.size());
+    const auto submit_ns = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                .count());
+    submit_time_ns[signal_value % submit_time_ns.size()].store(submit_ns,
+                                                               std::memory_order_relaxed);
+    const u64 submit_op = VideoCore::GpuTrace::write_pos.load(std::memory_order_relaxed);
+    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Submit, cmd_buffers.size(), signal_value,
+                                submit_op, trace_id);
+    const auto submit_start = std::chrono::steady_clock::now();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    const auto submit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - submit_start)
+                               .count();
+    last_submit_op = submit_op + 1;
     if (submit_result == vk::Result::eErrorDeviceLost) {
         VideoCore::GpuTrace::g_device_lost.store(true);
+        LOG_CRITICAL(Render_Vulkan, "queue submit blocked for {} ms before device lost",
+                     submit_ms);
         VideoCore::GpuTrace::Dump("submit");
+        for (u32 i = 0; i < 3; ++i) {
+            VideoCore::GpuTrace::DumpSubmission("submit", trace_id, i);
+        }
         instance.ReportDeviceFault("submit");
+        if (std::getenv("SHADPS4_GPU_CHECKPOINTS") != nullptr) {
+            instance.LogCheckpoints(instance.GetGraphicsQueue(), "submit: device lost");
+        }
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
@@ -437,6 +464,79 @@ void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmd
                                                       ? vk::ImageAspectFlagBits::eColor
                                                       : vk::ImageAspectFlagBits::eNone);
     }
+}
+
+void Scheduler::StartSubmitWatchdog() {
+    const char* env = std::getenv("SHADPS4_GPU_SUBMIT_WATCHDOG_MS");
+    if (env == nullptr) {
+        return;
+    }
+    const u64 threshold_ms = std::strtoull(env, nullptr, 10);
+    if (threshold_ms == 0) {
+        return;
+    }
+
+    const vk::Semaphore timeline = work_semaphore.Handle();
+    const vk::Device device = instance.GetDevice();
+    std::thread([this, timeline, device, threshold_ms] {
+        Common::SetCurrentThreadName("shadPS4:GpuSubmitWatchdog");
+        u64 last_progress{};
+        auto last_change = std::chrono::steady_clock::now();
+        bool reported{};
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (VideoCore::GpuTrace::g_device_lost.load(std::memory_order_relaxed)) {
+                return;
+            }
+            const u64 submitted = work_semaphore.CurrentTick() - 1;
+            if (submitted == 0) {
+                continue;
+            }
+            auto [result, counter] = device.getSemaphoreCounterValue(timeline);
+            if (result != vk::Result::eSuccess) {
+                return;
+            }
+            if (counter != last_progress) {
+                const auto now_ns = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+                for (u64 tick = last_progress + 1; tick <= counter; ++tick) {
+                    const u64 start = submit_time_ns[tick % submit_time_ns.size()].load(
+                        std::memory_order_relaxed);
+                    if (start == 0) {
+                        continue;
+                    }
+                    const u64 elapsed_ms = (now_ns - start) / 1'000'000;
+                    if (elapsed_ms > 200) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "GPU submission tick={} took {} ms (completed={} "
+                                    "submitted={})",
+                                    tick, elapsed_ms, counter, submitted);
+                    }
+                }
+                last_progress = counter;
+                last_change = std::chrono::steady_clock::now();
+                reported = false;
+            }
+            if (counter >= submitted) {
+                continue;
+            }
+            const auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - last_change)
+                                     .count();
+            if (!reported && idle_ms > static_cast<s64>(threshold_ms)) {
+                reported = true;
+                LOG_CRITICAL(Render_Vulkan,
+                             "GPU submit watchdog: no progress for {} ms (completed={} "
+                             "submitted={}); dumping the stuck submission",
+                             idle_ms, counter, submitted);
+                VideoCore::GpuTrace::DumpSubmissionByTick("watchdog: stuck submission",
+                                                          trace_id, counter + 1);
+                instance.LogCheckpoints(instance.GetGraphicsQueue(), "watchdog: stuck submission");
+            }
+        }
+    }).detach();
 }
 
 } // namespace Vulkan

@@ -66,6 +66,9 @@ public:
     /// Returns {reached_count, last_marker}.
     std::pair<u32, u64> QueryCheckpoints(vk::Queue queue) const;
 
+    /// Logs the queue checkpoint data: the commands that were executing when the GPU stalled.
+    void LogCheckpoints(vk::Queue queue, const char* reason) const;
+
     vk::PhysicalDevice GetPhysicalDevice() const {
         return physical_device;
     }

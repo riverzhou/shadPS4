@@ -588,7 +588,12 @@ bool PipelineCache::RefreshGraphicsStages() {
         }
         break;
     case AmdGpu::ShaderStageEnable::VgtStages::Vs:
-        bind_stage(HwStage::Vertex, SwStage::Vertex);
+        // The vertex stage is nominally always enabled, but the program address can still be
+        // zero (for example for a draw issued while the pipeline state is being rebuilt). An
+        // empty graphics pipeline is invalid and hangs some drivers, so drop the draw instead.
+        if (!bind_stage(HwStage::Vertex, SwStage::Vertex)) {
+            return false;
+        }
         break;
     default:
         LOG_WARNING(Render_Vulkan, "unimplemented shader stage {}", (u32)regs.stage_enable.raw);

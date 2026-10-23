@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <limits>
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
@@ -34,8 +35,17 @@ void Semaphore::Refresh() {
     do {
         this_tick = gpu_tick.load(std::memory_order_acquire);
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
-        ASSERT_MSG(counter_result == vk::Result::eSuccess,
-                   "Failed to get master semaphore value: {}", vk::to_string(counter_result));
+        if (counter_result != vk::Result::eSuccess) {
+            // The device can be lost while the CPU is still a few submissions ahead; report it
+            // where it is observed instead of asserting in a semaphore query, so the submit path
+            // (which knows which work was in flight) can dump it.
+            VideoCore::GpuTrace::g_device_lost.store(true, std::memory_order_relaxed);
+            LOG_CRITICAL(Render_Vulkan, "Timeline semaphore query failed: {}",
+                         vk::to_string(counter_result));
+            VideoCore::GpuTrace::Dump("semaphore refresh");
+            instance.ReportDeviceFault("semaphore refresh");
+            return;
+        }
 
         counter = cntr;
         if (counter < this_tick) {

@@ -23,6 +23,27 @@
 
 namespace Vulkan {
 
+// A single draw expanding to more vertices than this is almost certainly a register/indirect
+// argument that was decoded wrong; such a draw can occupy the GPU for long enough to reset it.
+static constexpr u64 LargeDrawVertexThreshold = 8u * 1024u * 1024u;
+
+// Debug switch: dump the resource bindings of one compute program by hash, without flooding the
+// log with every dispatch of every program.
+static bool MatchesCsHashLog(u64 pgm_hash) {
+    static const u64 wanted = [] {
+        const char* env = std::getenv("SHADPS4_LOG_CS_HASH");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : 0ull;
+    }();
+    return wanted != 0 && wanted == pgm_hash;
+}
+
+// Debug switch: insert a device diagnostic checkpoint before every draw and dispatch so that a
+// GPU stall can be attributed to the exact command instead of the whole submission.
+static bool GpuCheckpointsEnabled() {
+    static const bool enabled = std::getenv("SHADPS4_GPU_CHECKPOINTS") != nullptr;
+    return enabled;
+}
+
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
     // is encountered and implemented in the recompiler.
@@ -193,8 +214,20 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     const auto& regs = liverpool->regs;
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
-    VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed : VideoCore::GpuTrace::Op::Draw, regs.num_indices,
-                     index_offset, reinterpret_cast<u64>(pipeline), 0);
+    const u32 num_instances = regs.num_instances.NumInstances();
+    VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed
+                                           : VideoCore::GpuTrace::Op::Draw,
+                                regs.num_indices, num_instances,
+                                reinterpret_cast<u64>(pipeline), index_offset);
+    if (u64{regs.num_indices} * num_instances > LargeDrawVertexThreshold) {
+        static std::atomic<u32> large_draw_log{0};
+        if (large_draw_log.fetch_add(1, std::memory_order_relaxed) < 16) {
+            LOG_WARNING(Render_Vulkan,
+                        "Large draw: {} indices x {} instances pipeline={:#x} primitive={}",
+                        regs.num_indices, num_instances, reinterpret_cast<u64>(pipeline),
+                        u32(regs.primitive_type));
+        }
+    }
     if (!pipeline) {
         return;
     }
@@ -224,6 +257,13 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    if (GpuCheckpointsEnabled()) {
+        instance.SetCheckpoint(
+            cmdbuf, VideoCore::GpuTrace::NextCheckpoint(
+                        is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed
+                                   : VideoCore::GpuTrace::Op::Draw,
+                        regs.num_indices, num_instances, reinterpret_cast<u64>(pipeline)));
+    }
 
     if (is_indexed) {
         cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
@@ -256,6 +296,18 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline(params);
     if (!pipeline) {
         return;
+    }
+    VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexedIndirect
+                                           : VideoCore::GpuTrace::Op::DrawIndirect,
+                                max_count, count_address != 0 ? 1 : 0,
+                                reinterpret_cast<u64>(pipeline), offset);
+    if (max_count > 1024 * 1024) {
+        static std::atomic<u32> large_indirect_log{0};
+        if (large_indirect_log.fetch_add(1, std::memory_order_relaxed) < 16) {
+            LOG_WARNING(Render_Vulkan,
+                        "Large indirect draw: max_count={} stride={} indexed={} pipeline={:#x}",
+                        max_count, stride, is_indexed, reinterpret_cast<u64>(pipeline));
+        }
     }
 
     PrepareRenderState(pipeline);
@@ -326,13 +378,14 @@ void Rasterizer::DispatchDirect() {
 
     const auto& cs_program = liverpool->GetCsRegs();
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
-    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Dispatch,
-                     u64(cs_program.dim_x) << 40 | (u64(cs_program.dim_y) << 20) |
-                         u64(cs_program.dim_z),
-                     reinterpret_cast<u64>(pipeline));
     if (!pipeline) {
         return;
     }
+    const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Dispatch,
+                                u64(cs_program.dim_x) << 40 | (u64(cs_program.dim_y) << 20) |
+                                    u64(cs_program.dim_z),
+                                cs.pgm_hash);
 
     // A dispatch with a zero group count does no work; some drivers still fault on it, so
     // skip it entirely instead of recording an empty dispatch.
@@ -344,7 +397,6 @@ void Rasterizer::DispatchDirect() {
         }
         return;
     }
-    const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
     if (std::getenv("SHADPS4_SKIP_CS") != nullptr) {
         const char* skip = std::getenv("SHADPS4_SKIP_CS");
         u64 skip_hash = 0;
@@ -364,7 +416,8 @@ void Rasterizer::DispatchDirect() {
         return;
     }
 
-    if (std::getenv("SHADPS4_LOG_CS_BINDINGS") != nullptr) {
+    if (std::getenv("SHADPS4_LOG_CS_BINDINGS") != nullptr ||
+        MatchesCsHashLog(cs.pgm_hash)) {
         LOG_INFO(Render_Vulkan, "CS bindings: pgm={:#x} dims={}x{}x{} buffers={} images={}",
                  cs.pgm_hash, cs_program.dim_x, cs_program.dim_y, cs_program.dim_z,
                  cs.buffers.size(), cs.images.size());
@@ -382,6 +435,39 @@ void Rasterizer::DispatchDirect() {
                      sharp.height, sharp.depth, sharp.NumLevels(), sharp.NumLayers(),
                      AmdGpu::NameOf(sharp.GetTileMode()), sharp.base_level, sharp.last_level);
         }
+        for (size_t i = 0; i < cs.buffers.size(); ++i) {
+            const auto& f = cs.buffers[i].sharp_fetch;
+            LOG_INFO(Render_Vulkan,
+                     "  bf[{}] summary={} off0={} mask={:#x} imm0={:#x} post={} type={} wr={} "
+                     "fmt={}",
+                     i, u32(f.summary), f.offsets[0], u32(f.load_mask), f.immediates[0],
+                     u32(cs.buffers[i].post_op), u32(cs.buffers[i].buffer_type),
+                     cs.buffers[i].is_written, cs.buffers[i].is_formatted);
+        }
+        for (size_t i = 0; i < cs.images.size(); ++i) {
+            const auto& f = cs.images[i].sharp_fetch;
+            LOG_INFO(Render_Vulkan,
+                     "  if[{}] summary={} off0={} mask={:#x} imm0={:#x} post={} arr={} wr={} "
+                     "depth={} mip={} cst={}",
+                     i, u32(f.summary), f.offsets[0], u32(f.load_mask), f.immediates[0],
+                     u32(cs.images[i].post_op), cs.images[i].is_array, cs.images[i].is_written,
+                     cs.images[i].is_depth, u32(cs.images[i].mip_fallback_mode),
+                     cs.images[i].constant_mip_index);
+        }
+        for (size_t i = 0; i < cs.samplers.size(); ++i) {
+            const auto& f = cs.samplers[i].sharp_fetch;
+            LOG_INFO(Render_Vulkan, "  sf[{}] summary={} off0={} mask={:#x} imm0={:#x} post={}",
+                     i, u32(f.summary), f.offsets[0], u32(f.load_mask), f.immediates[0],
+                     u32(cs.samplers[i].post_op));
+        }
+        LOG_INFO(Render_Vulkan,
+                 "  srt: walker={:#x} size={} flatbuf_dw={} ud=[{:#x},{:#x},{:#x},{:#x}] "
+                 "flat=[{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x}]",
+                 reinterpret_cast<u64>(cs.srt_info.walker_func), cs.srt_info.walker_func_size,
+                 cs.srt_info.flattened_bufsize_dw, cs.user_data[0], cs.user_data[1],
+                 cs.user_data[2], cs.user_data[3], cs.flattened_ud_buf[0], cs.flattened_ud_buf[1],
+                 cs.flattened_ud_buf[2], cs.flattened_ud_buf[3], cs.flattened_ud_buf[4],
+                 cs.flattened_ud_buf[5], cs.flattened_ud_buf[6], cs.flattened_ud_buf[7]);
     }
     if (!BindResources(pipeline)) {
         return;
@@ -396,6 +482,14 @@ void Rasterizer::DispatchDirect() {
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
+    if (GpuCheckpointsEnabled()) {
+        instance.SetCheckpoint(
+            cmdbuf, VideoCore::GpuTrace::NextCheckpoint(
+                        VideoCore::GpuTrace::Op::Dispatch,
+                        u64(cs_program.dim_x) << 40 | (u64(cs_program.dim_y) << 20) |
+                            u64(cs_program.dim_z),
+                        cs.pgm_hash));
+    }
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     DebugState.IncDispatch();
 
@@ -430,6 +524,11 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
+    if (GpuCheckpointsEnabled()) {
+        instance.SetCheckpoint(cmdbuf,
+                               VideoCore::GpuTrace::NextCheckpoint(
+                                   VideoCore::GpuTrace::Op::DispatchIndirect, address));
+    }
     cmdbuf.dispatchIndirect(buffer->Handle(), base);
     DebugState.IncDispatch();
 

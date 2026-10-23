@@ -11,4 +11,8 @@ namespace Shader::Backend::SPIRV {
 
 [[nodiscard]] std::vector<u32> EmitDiscardFragmentShader(std::array<Shader::OutputMap, 3> outputs);
 
+/// Returns an empty fragment shader. Used when the guest disables the pixel shader stage but
+/// rasterization (and therefore a fragment stage in the pipeline) is still required.
+[[nodiscard]] std::vector<u32> EmitNullFragmentShader();
+
 } // namespace Shader::Backend::SPIRV

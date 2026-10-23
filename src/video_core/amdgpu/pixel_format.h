@@ -358,7 +358,9 @@ constexpr NumberConversion MapNumberConversion(const NumberFormat num_fmt,
         case DataFormat::Format16_16_16_16:
             return NumberConversion::Sint16ToSnormNz;
         default:
-            UNREACHABLE_MSG("data_fmt = {}", u32(data_fmt));
+            // SNORM_NZ only applies to the 8/16-bit integer formats above. Titles do bind other
+            // formats with this number format (e.g. 32-bit floats); those need no conversion.
+            return NumberConversion::None;
         }
     }
     default:

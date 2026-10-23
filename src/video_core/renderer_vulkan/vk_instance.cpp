@@ -13,6 +13,7 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include <vector>
 
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -208,6 +209,27 @@ std::pair<u32, u64> Instance::QueryCheckpoints(vk::Queue queue) const {
         last = std::max(last, reinterpret_cast<uintptr_t>(data[i].pCheckpointMarker));
     }
     return {count, last};
+}
+
+void Instance::LogCheckpoints(vk::Queue queue, const char* reason) const {
+    if (!device_checkpoints) {
+        return;
+    }
+    u32 count = 0;
+    queue.getCheckpointDataNV(&count, nullptr);
+    if (count == 0) {
+        LOG_CRITICAL(Render_Vulkan, "GPU checkpoint data empty: {}", reason);
+        return;
+    }
+    std::vector<vk::CheckpointDataNV> data(count);
+    queue.getCheckpointDataNV(&count, data.data());
+    LOG_CRITICAL(Render_Vulkan, "GPU checkpoints ({} entries): {}", count, reason);
+    for (u32 i = 0; i < count; ++i) {
+        const u64 marker = reinterpret_cast<uintptr_t>(data[i].pCheckpointMarker);
+        LOG_CRITICAL(Render_Vulkan, " checkpoint[{}] stage={} marker={}", i,
+                     vk::to_string(data[i].stage), marker);
+        VideoCore::GpuTrace::DumpCheckpoint(marker);
+    }
 }
 
 void Instance::LogMemoryUsage() const {

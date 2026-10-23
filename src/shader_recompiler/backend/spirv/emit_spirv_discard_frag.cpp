@@ -120,4 +120,20 @@ std::vector<u32> EmitDiscardFragmentShader(std::array<Shader::OutputMap, 3> outp
     return ctx.Assemble();
 }
 
+std::vector<u32> EmitNullFragmentShader() {
+    Sirit::Module module{SPIRV_VERSION_1_5};
+    module.AddCapability(spv::Capability::Shader);
+    module.SetMemoryModel(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
+
+    const Id void_id{module.TypeVoid()};
+    const Id function_type{module.TypeFunction(void_id)};
+    const Id main{module.OpFunction(void_id, spv::FunctionControlMask::MaskNone, function_type)};
+    module.AddEntryPoint(spv::ExecutionModel::Fragment, main, "main");
+    module.AddExecutionMode(main, spv::ExecutionMode::OriginUpperLeft);
+    module.AddLabel(module.OpLabel());
+    module.OpReturn();
+    module.OpFunctionEnd();
+    return module.Assemble();
+}
+
 } // namespace Shader::Backend::SPIRV

@@ -245,6 +245,18 @@ GraphicsPipeline::GraphicsPipeline(
             .module = CompileSPV(sdata.fragment, instance.GetDevice()),
             .pName = "main",
         });
+    } else {
+        // The guest can disable the pixel shader stage; rasterization still runs (depth writes,
+        // no color output). Vulkan requires a fragment stage whenever rasterizer discard is off,
+        // so provide an empty shader instead of creating an incomplete pipeline.
+        if (sdata.fragment.empty()) {
+            sdata.fragment = Shader::Backend::SPIRV::EmitNullFragmentShader();
+        }
+        shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eFragment,
+            .module = CompileSPV(sdata.fragment, instance.GetDevice()),
+            .pName = "main",
+        });
     }
 
     const vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size_ci = {
