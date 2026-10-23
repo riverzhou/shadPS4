@@ -61,7 +61,8 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         // GCN compares per instruction; a plain read of a compare sampler is undefined in Vulkan.
         .compareEnable = is_depth,
         .compareOp = LiverpoolToVK::DepthCompare(sampler.depth_compare_func),
-        .minLod = sampler.MinLod(),
+        // Some titles set minLod above maxLod (transient state); Vulkan requires minLod <= maxLod.
+        .minLod = std::min(sampler.MinLod(), sampler.MaxLod()),
         .maxLod = sampler.MaxLod(),
         .borderColor = border_color,
         .unnormalizedCoordinates = false, // Handled in shader due to Vulkan limitations.

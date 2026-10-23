@@ -1002,7 +1002,11 @@ bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
                 }
             } else {
-                const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
+                // A descriptor at the very end of a mapped range clamps to zero bytes; a
+                // zero-sized descriptor range is invalid in Vulkan, so keep a minimal range.
+                const u64 size =
+                    std::max<u64>(memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize()),
+                                  4);
                 if (size != vsharp.GetSize()) {
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
