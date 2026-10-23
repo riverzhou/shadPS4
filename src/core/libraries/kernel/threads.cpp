@@ -3,11 +3,13 @@
 
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/threads.h"
+#include "core/libraries/kernel/guest_stack_dump.h"
 #include "core/libraries/kernel/threads/pthread.h"
 
 namespace Libraries::Kernel {
 
 void RegisterThreads(Core::Loader::SymbolsResolver* sym) {
+    StartGuestStackDumpTimer();
     RegisterBarrier(sym);
     RegisterMutex(sym);
     RegisterCond(sym);
