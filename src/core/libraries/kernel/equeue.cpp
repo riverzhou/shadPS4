@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include <span>
 #include <thread>
 #include <magic_enum/magic_enum.hpp>
@@ -597,6 +598,7 @@ int PS4_SYSV_ABI sceKernelDeleteEqueue(OrbisKernelEqueue eq) {
 
 int PS4_SYSV_ABI sceKernelWaitEqueue(OrbisKernelEqueue eq, OrbisKernelEvent* ev, int num, int* out,
                                      OrbisKernelUseconds* timo) {
+    RecordGuestWait("sceKernelWaitEqueue", reinterpret_cast<u64>(__builtin_return_address(0)));
     HLE_TRACE;
     if (!kqueues.contains(eq)) {
         return ORBIS_KERNEL_ERROR_EBADF;

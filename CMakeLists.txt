@@ -360,6 +360,7 @@ set(KERNEL_LIB src/core/libraries/kernel/coredump/coredump.cpp
                src/core/libraries/kernel/memory.cpp
                src/core/libraries/kernel/memory.h
                src/core/libraries/kernel/guest_stack_dump.cpp
+               src/core/libraries/kernel/wait_trace.cpp
                src/core/libraries/kernel/threads.cpp
                src/core/libraries/kernel/threads.h
                src/core/libraries/kernel/time.cpp

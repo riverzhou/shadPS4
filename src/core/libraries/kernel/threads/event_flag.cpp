@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include <condition_variable>
 #include <list>
 #include <mutex>
@@ -390,6 +391,7 @@ int PS4_SYSV_ABI sceKernelPollEventFlag(OrbisKernelEventFlag ef, u64 bitPattern,
 }
 int PS4_SYSV_ABI sceKernelWaitEventFlag(OrbisKernelEventFlag ef, u64 bitPattern, u32 waitMode,
                                         u64* pResultPat, OrbisKernelUseconds* pTimeout) {
+    RecordGuestWait("sceKernelWaitEventFlag", reinterpret_cast<u64>(__builtin_return_address(0)));
     LOG_DEBUG(Kernel_Event, "called bitPattern = {:#x} waitMode = {:#x}", bitPattern, waitMode);
     if (ef == nullptr) {
         return ORBIS_KERNEL_ERROR_ESRCH;

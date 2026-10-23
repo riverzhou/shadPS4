@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include "common/assert.h"
 #include "common/thread.h"
 #ifdef _WIN32
@@ -212,6 +213,7 @@ static int JoinThread(PthreadT pthread, void** thread_return, const OrbisKernelT
 }
 
 int PS4_SYSV_ABI posix_pthread_join(PthreadT pthread, void** thread_return) {
+    RecordGuestWait("pthread_join", reinterpret_cast<u64>(__builtin_return_address(0)));
     return JoinThread(pthread, thread_return, nullptr);
 }
 

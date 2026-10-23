@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include <condition_variable>
 #include <limits>
 #include <list>
@@ -327,6 +328,7 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
 }
 
 s32 PS4_SYSV_ABI sceKernelWaitSema(OrbisKernelSema sem, s32 needCount, u32* pTimeout) {
+    RecordGuestWait("sceKernelWaitSema", reinterpret_cast<u64>(__builtin_return_address(0)));
     if (!orbis_sems.IsAllocated(sem)) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -209,6 +210,7 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mutex) {
+    RecordGuestWait("pthread_cond_wait", reinterpret_cast<u64>(__builtin_return_address(0)));
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     return cvp->Wait(mutex, nullptr);
