@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -30,8 +31,9 @@ struct WaitEntry {
     char thread[20]{};
 };
 
-std::array<WaitEntry, RingSize> g_ring{};
-std::size_t g_ring_pos{};
+// One entry per guest thread: a deadlock snapshot needs the *current* wait of every thread, and
+// a busy thread (the updater) would otherwise push the interesting entries out of a ring.
+std::map<u32, WaitEntry> g_last_wait;
 std::mutex g_ring_mutex;
 bool g_enabled = std::getenv("SHADPS4_DUMP_WAITS_AT") != nullptr;
 std::atomic<u32> g_tid_hint{0};
@@ -61,8 +63,9 @@ void RecordGuestWait(const char* name, u64 guest_ra) {
         std::snprintf(entry.thread, sizeof(entry.thread), "%s", thread_name.c_str());
     }
     std::scoped_lock lk{g_ring_mutex};
-    g_ring[g_ring_pos] = entry;
-    g_ring_pos = (g_ring_pos + 1) % RingSize;
+    if (g_last_wait.size() < 400 || g_last_wait.contains(entry.tid)) {
+        g_last_wait[entry.tid] = entry;
+    }
 }
 
 void DumpGuestWaitRing() {
@@ -77,15 +80,10 @@ void DumpGuestWaitRing() {
         return;
     }
     // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
-    LOG_INFO(Kernel, "guest wait ring #{} (oldest first, base of the module is in the boot log)",
-             index);
-    for (std::size_t i = 0; i < RingSize; ++i) {
-        const auto& e = g_ring[(g_ring_pos + i) % RingSize];
-        if (e.name == nullptr) {
-            continue;
-        }
-        LOG_INFO(Kernel, "  wait {:<22} ra={:#x} thread='{}' tid={} at={} ms", e.name,
-                 e.guest_ra, e.thread, e.tid, e.ms);
+    LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
+    for (const auto& [tid, e] : g_last_wait) {
+        LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} at={} ms", e.thread, e.tid,
+                 e.name, e.guest_ra, e.ms);
     }
 }
 

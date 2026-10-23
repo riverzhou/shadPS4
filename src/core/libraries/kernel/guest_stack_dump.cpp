@@ -9,6 +9,7 @@
 #include <map>
 #include <cstdlib>
 #include <mutex>
+#include <ranges>
 #include <string>
 #include <thread>
 #include <vector>
@@ -82,6 +83,10 @@ void DumpGuestThreadStacks() {
 #endif
 }
 
+namespace {
+void StartOneSampler(std::string target);
+} // namespace
+
 void StartThreadRipSampler() {
     static std::once_flag once;
     std::call_once(once, [] {
@@ -89,7 +94,20 @@ void StartThreadRipSampler() {
         if (name == nullptr) {
             return;
         }
-        const std::string target{name};
+        // A comma separated list samples several threads at once, which is what shows whether a
+        // frozen title still has any thread making progress.
+        for (const auto& part : std::views::split(std::string_view{name}, ',')) {
+            const std::string target{part.begin(), part.end()};
+            if (target.empty()) {
+                continue;
+            }
+            StartOneSampler(target);
+        }
+    });
+}
+
+namespace {
+void StartOneSampler(std::string target) {
         std::thread{[target] {
             // Let the title finish loading before touching its threads; suspending a guest
             // thread while the emulator is still wiring up libraries is not safe.
@@ -192,8 +210,8 @@ void StartThreadRipSampler() {
             }
         }}.detach();
         LOG_INFO(Kernel, "rip sampler started for thread '{}'", target);
-    });
 }
+} // namespace
 
 void StartGuestStackDumpTimer() {
     static std::once_flag once;
