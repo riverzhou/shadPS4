@@ -387,7 +387,8 @@ constexpr void ComputeImageSize(u32 pitch, u32 height, u32 depth, u32 levels, u3
 
         auto& mip_info = out_mips_layout[mip];
         u32 mip_thickness = 1;
-        if (array_mode == AmdGpu::ArrayMode::ArrayLinearAligned) {
+        if (array_mode == AmdGpu::ArrayMode::ArrayLinearAligned ||
+            array_mode == AmdGpu::ArrayMode::ArrayLinearGeneral) {
             std::tie(mip_info.pitch, mip_info.height, mip_info.size) =
                 ImageSizeLinearAligned(mip_w, mip_h, num_bits, num_samples);
         } else if (macro &&

@@ -182,8 +182,6 @@ bool ImageInfo::IsCompatible(const ImageInfo& info) const {
 }
 
 void ImageInfo::UpdateSize() noexcept {
-    ASSERT_MSG(array_mode != AmdGpu::ArrayMode::ArrayLinearGeneral,
-               "Unhandled array mode: ArrayLinearGeneral");
     if (std::has_single_bit(pitch) && std::bit_width(pitch) <= MAX_DIM_LOG2 &&
         pitch == size.height && size.depth == 1 && resources.levels == std::bit_width(pitch) &&
         resources.layers == 1 && num_samples == 1 && props.is_block && props.is_pow2 && !alt_tile &&
