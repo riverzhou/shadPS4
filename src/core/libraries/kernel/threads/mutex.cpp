@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/libraries/kernel/wait_trace.h"
 #include <thread>
 #include <fmt/format.h>
 
@@ -272,6 +273,7 @@ s32 PS4_SYSV_ABI posix_pthread_mutex_trylock(PthreadMutexT* mutex) {
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX
+    RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)));
     return (*mutex)->Lock(nullptr);
 }
 

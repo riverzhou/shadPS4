@@ -5,6 +5,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
@@ -13,6 +14,8 @@
 #include <vector>
 
 #include "common/logging/log.h"
+#include "core/libraries/kernel/guest_stack_dump.h"
+#include "core/libraries/kernel/threads/pthread.h"
 
 namespace Libraries::Kernel {
 
@@ -24,6 +27,7 @@ struct WaitEntry {
     u64 guest_ra;
     u32 tid;
     u64 ms;
+    char thread[20]{};
 };
 
 std::array<WaitEntry, RingSize> g_ring{};
@@ -49,8 +53,15 @@ void RecordGuestWait(const char* name, u64 guest_ra) {
     }
     last_ra = guest_ra;
     last_ms = now;
+    WaitEntry entry{name, guest_ra, ++g_tid_hint, now};
+    const auto* current = g_curthread;
+    if (current != nullptr) {
+        entry.tid = static_cast<u32>(current->tid.load());
+        const auto& thread_name = current->name;
+        std::snprintf(entry.thread, sizeof(entry.thread), "%s", thread_name.c_str());
+    }
     std::scoped_lock lk{g_ring_mutex};
-    g_ring[g_ring_pos] = WaitEntry{name, guest_ra, ++g_tid_hint, now};
+    g_ring[g_ring_pos] = entry;
     g_ring_pos = (g_ring_pos + 1) % RingSize;
 }
 
@@ -73,8 +84,8 @@ void DumpGuestWaitRing() {
         if (e.name == nullptr) {
             continue;
         }
-        LOG_INFO(Kernel, "  wait {:<24} ra={:#x} seq={} at={} ms", e.name, e.guest_ra, e.tid,
-                 e.ms);
+        LOG_INFO(Kernel, "  wait {:<22} ra={:#x} thread='{}' tid={} at={} ms", e.name,
+                 e.guest_ra, e.thread, e.tid, e.ms);
     }
 }
 

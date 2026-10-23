@@ -1214,7 +1214,19 @@ Frame* Presenter::GetRenderFrame() {
     Frame* frame;
     {
         std::unique_lock lock{free_mutex};
+        const auto wait_start = std::chrono::steady_clock::now();
         free_cv.wait(lock, [this] { return !free_queue.empty(); });
+        const auto waited_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - wait_start)
+                                   .count();
+        static const auto stall_ms = [] {
+            const char* env = std::getenv("SHADPS4_PRESENT_STALL_MS");
+            return env != nullptr ? std::strtoull(env, nullptr, 10) : u64{2000};
+        }();
+        if (static_cast<u64>(waited_ms) >= stall_ms) {
+            LOG_WARNING(Render_Vulkan, "Waited {} ms for a free present frame (queue {})",
+                        waited_ms, free_queue.size());
+        }
         LOG_DEBUG(Render_Vulkan, "Got render frame, remaining {}", free_queue.size() - 1);
 
         // Take the frame from the queue
@@ -1231,12 +1243,26 @@ Frame* Presenter::GetRenderFrame() {
     };
 
     // Wait for the presentation to be finished so all frame resources are free
+    const auto fence_start = std::chrono::steady_clock::now();
     while (wait() != vk::Result::eSuccess) {
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         // Retry if the waiting times out
         if (result == vk::Result::eTimeout) {
             continue;
+        }
+    }
+
+    {
+        const auto fence_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - fence_start)
+                                  .count();
+        static const auto stall_ms = [] {
+            const char* env = std::getenv("SHADPS4_PRESENT_STALL_MS");
+            return env != nullptr ? std::strtoull(env, nullptr, 10) : u64{2000};
+        }();
+        if (static_cast<u64>(fence_ms) >= stall_ms) {
+            LOG_WARNING(Render_Vulkan, "Waited {} ms for the present fence", fence_ms);
         }
     }
 
