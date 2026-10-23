@@ -3,6 +3,8 @@
 
 #include <bit>
 #include <magic_enum/magic_enum.hpp>
+
+#include "common/logging/log.h"
 #include "video_core/amdgpu/tiling.h"
 
 namespace AmdGpu {
@@ -48,7 +50,8 @@ PipeConfig GetPipeConfig(TileMode tile_mode) {
     case TileMode::DisplayLinearGeneral:
         return PipeConfig::P2;
     default:
-        UNREACHABLE_MSG("Unknown tile mode = {}", u32(tile_mode));
+        LOG_WARNING(Render, "Unknown tile mode {}, assuming 32x32 pipe", u32(tile_mode));
+        return PipeConfig::P8_32x32_16x16;
     }
 }
 
@@ -85,7 +88,8 @@ PipeConfig GetAltPipeConfig(TileMode tile_mode) {
     case TileMode::DisplayLinearGeneral:
         return PipeConfig::P2;
     default:
-        UNREACHABLE_MSG("Unknown tile mode = {}", u32(tile_mode));
+        LOG_WARNING(Render, "Unknown tile mode {}, assuming 32x32 pipe", u32(tile_mode));
+        return PipeConfig::P16_32x32_8x16;
     }
 }
 
@@ -122,7 +126,11 @@ u32 GetSampleSplit(TileMode tile_mode) {
     case TileMode::Thin3DThinPrt:
         return 2;
     default:
-        UNREACHABLE_MSG("Unknown tile mode = {}", u32(tile_mode));
+        // An unknown tile mode means the descriptor was not decoded as a tiling mode we know
+        // (titles do bind such descriptors transiently). Assume no split instead of aborting;
+        // the access is already discarded by the caller if the descriptor is invalid.
+        LOG_WARNING(Render, "Unknown tile mode {}, assuming no sample split", u32(tile_mode));
+        return 1;
     }
 }
 

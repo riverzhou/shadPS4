@@ -255,10 +255,21 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     if (!LoadShaderMeta(ar, program->info, spec, perm_idx)) {
         return false;
     }
-    LOG_INFO(Render_Vulkan,
-             "Loaded shader meta pgm={:#x} perm={} buffers={} images={} samplers={}", 
-             program->info.pgm_hash, perm_idx, program->info.buffers.size(),
-             program->info.images.size(), program->info.samplers.size());
+    // A pipeline's descriptor set layout sizes dynamic mip arrays from the resource
+    // descriptors of the shader info. Those descriptors are part of the shader state at the
+    // time the pipeline is created; a cached info only holds whatever the writing session had
+    // in them, so the layout can end up with a different array size than the descriptors the
+    // dispatch writes. Leave such pipelines to be compiled at first use instead.
+    const bool dynamic_mip_images =
+        std::ranges::any_of(program->info.images, [](const Shader::ImageResource& image) {
+            return image.mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex;
+        });
+    if (dynamic_mip_images) {
+        LOG_INFO(Render_Vulkan,
+                 "Not preloading {:#x}: its descriptor layout depends on runtime image descriptors",
+                 program->info.pgm_hash);
+        return false;
+    }
 
     std::vector<u32> spv{};
     Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary,
