@@ -11,6 +11,8 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include <vector>
+
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -69,6 +71,7 @@ std::unordered_map<vk::Format, vk::FormatProperties3> GetFormatProperties(
     // Other miscellaneous formats, e.g. for color buffers, swizzles, or compatibility
     static constexpr std::array misc_formats = {
         vk::Format::eA2R10G10B10UnormPack32,
+        vk::Format::eR4G4B4A4UnormPack16,
         vk::Format::eB8G8R8A8Unorm,
         vk::Format::eB8G8R8A8Srgb,
         vk::Format::eD24UnormS8Uint,
@@ -182,6 +185,81 @@ Instance::~Instance() {
     vmaDestroyAllocator(allocator);
 }
 
+void Instance::SetCheckpoint(vk::CommandBuffer cmdbuf, u64 marker) const {
+    if (!device_checkpoints) {
+        return;
+    }
+    cmdbuf.setCheckpointNV(reinterpret_cast<const void*>(static_cast<uintptr_t>(marker)));
+}
+
+std::pair<u32, u64> Instance::QueryCheckpoints(vk::Queue queue) const {
+    if (!device_checkpoints) {
+        return {0, 0};
+    }
+    u32 count = 0;
+    queue.getCheckpointDataNV(&count, nullptr);
+    if (count == 0) {
+        return {0, 0};
+    }
+    std::vector<vk::CheckpointDataNV> data(count);
+    queue.getCheckpointDataNV(&count, data.data());
+    u64 last = 0;
+    for (u32 i = 0; i < count; ++i) {
+        last = std::max(last, reinterpret_cast<uintptr_t>(data[i].pCheckpointMarker));
+    }
+    return {count, last};
+}
+
+void Instance::LogMemoryUsage() const {
+    if (!allocator) {
+        return;
+    }
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(allocator, budgets.data());
+    for (u32 i = 0; i < memory_properties.memoryHeapCount; ++i) {
+        const auto& b = budgets[i];
+        LOG_INFO(Render_Vulkan, "VMA heap {}: usage={} MB budget={} MB allocation={} MB", i,
+                 b.usage >> 20, b.budget >> 20, b.statistics.allocationBytes >> 20);
+    }
+}
+
+void Instance::ReportDeviceFault(const char* site) const {
+    // Opt-in: on some drivers (observed with NVIDIA 6xx) vkGetDeviceFaultInfoEXT itself
+    // faults once the device is already lost, which would turn a recoverable device-loss
+    // report into a process crash.
+    static const bool enabled = std::getenv("SHADPS4_VK_DEVICE_FAULT") != nullptr;
+    if (!enabled || !device_fault || !device) {
+        return;
+    }
+    const auto get_fault_info = device_fault_info;
+    if (get_fault_info == nullptr) {
+        return;
+    }
+    VkDeviceFaultCountsEXT counts{};
+    counts.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT;
+    if (get_fault_info(*device, &counts, nullptr) != VK_SUCCESS) {
+        return;
+    }
+    std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
+    VkDeviceFaultInfoEXT fault{};
+    fault.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT;
+    fault.pAddressInfos = addresses.data();
+    fault.pVendorInfos = vendors.data();
+    if (get_fault_info(*device, &counts, &fault) != VK_SUCCESS) {
+        return;
+    }
+    LOG_CRITICAL(Render_Vulkan, "Device fault at {}: {}", site, fault.description);
+    for (u32 i = 0; i < counts.addressInfoCount; ++i) {
+        LOG_CRITICAL(Render_Vulkan, "  fault address {} type={} addr={:#x}", i,
+                     static_cast<u32>(addresses[i].addressType), addresses[i].reportedAddress);
+    }
+    for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
+        LOG_CRITICAL(Render_Vulkan, "  vendor fault {} code={:#x} data={:#x}", i,
+                     vendors[i].vendorFaultCode, vendors[i].vendorFaultData);
+    }
+}
+
 std::string Instance::GetDriverVersionName() {
     // Extracted from
     // https://github.com/SaschaWillems/vulkan.gpuinfo.org/blob/5dddea46ea1120b0df14eef8f15ff8e318e35462/functions.php#L308-L314
@@ -254,6 +332,8 @@ bool Instance::CreateDevice() {
                VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
     ASSERT_MSG(add_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+    device_fault = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    device_checkpoints = add_extension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
 
     const auto robustness2_features = feature_chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
     ASSERT_MSG(robustness2_features.robustBufferAccess2,
@@ -593,6 +673,11 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+
+    if (device_fault) {
+        device_fault_info = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
+            device->getProcAddr("vkGetDeviceFaultInfoEXT"));
+    }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);

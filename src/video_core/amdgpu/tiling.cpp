@@ -375,7 +375,9 @@ u32 CalculateTileSplit(TileMode tile_mode, ArrayMode array_mode, MicroTileMode m
 MacroTileMode CalculateMacrotileMode(TileMode tile_mode, u32 bpp, u32 num_samples) {
     ASSERT_MSG(std::has_single_bit(num_samples) && num_samples <= 16, "Invalid sample count {}",
                num_samples);
-    ASSERT_MSG(bpp >= 1 && bpp <= 128, "Invalid bpp {}", bpp);
+    if (!std::has_single_bit(num_samples) || num_samples > 16 || bpp < 1 || bpp > 128) {
+        return MacroTileMode(0);
+    }
 
     const ArrayMode array_mode = GetArrayMode(tile_mode);
     ASSERT_MSG(IsMacroTiled(array_mode), "Tile mode not macro tiled");

@@ -98,11 +98,15 @@ constexpr size_t GetSurfaceFormatTableIndex(AmdGpu::DataFormat data_format,
 
 constexpr vk::Format SurfaceFormat(AmdGpu::DataFormat data_format,
                                    AmdGpu::NumberFormat num_format) noexcept {
+    if (data_format == AmdGpu::DataFormat::Format4_4_4_4) {
+        return vk::Format::eR4G4B4A4UnormPack16;
+    }
     vk::Format result = surface_format_table[GetSurfaceFormatTableIndex(data_format, num_format)];
     bool found =
         result != vk::Format::eUndefined || data_format == AmdGpu::DataFormat::FormatInvalid;
-    ASSERT_MSG(found, "Unknown data_format={} and num_format={}", static_cast<u32>(data_format),
-               static_cast<u32>(num_format));
+    if (!found) {
+        return vk::Format::eR8G8B8A8Unorm;
+    }
     return result;
 }
 

@@ -8,6 +8,8 @@
 #include "video_core/texture_cache/image.h"
 #include "video_core/texture_cache/image_info.h"
 #include "video_core/texture_cache/image_view.h"
+#include <cstdlib>
+
 #include "video_core/texture_cache/tile_manager.h"
 
 #include "video_core/host_shaders/tiling_macro_128_comp.h"
@@ -195,14 +197,16 @@ vk::Pipeline TileManager::GetTilingPipeline(const ImageInfo& info, bool is_tiler
 
 std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* in_buffer,
                                                        u64 in_offset, const ImageInfo& info) {
-    if (!info.props.is_tiled) {
+    // Debug switch: bypass the compute detiler to check whether a GPU hang is caused by it.
+    static const bool no_tiling = std::getenv("SHADPS4_NO_TILING") != nullptr;
+    if (no_tiling || !info.props.is_tiled) {
         return {in_buffer, in_offset};
     }
 
     TilingInfo params{};
     params.bank_swizzle = info.bank_swizzle;
     params.micro_tiled_mips = info.micro_tiled_mips;
-    params.num_mips = info.resources.levels;
+    params.num_mips = std::clamp<u32>(info.resources.levels, 1, TilingInfo{}.mips.size());
     for (u32 mip = 0; mip < params.num_mips; ++mip) {
         auto& mip_info = params.mips[mip];
         mip_info = info.mips_layout[mip];
@@ -268,6 +272,14 @@ std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* 
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *pl_layout, 0, set_writes);
 
     const auto dim_x = (info.guest_size / (info.num_bits / 8)) / 64;
+    if (std::getenv("SHADPS4_TRACE_TILE") != nullptr) {
+        LOG_INFO(Render_Vulkan,
+                 "DetileImage guest_size={:#x} bits={} dim_x={} extent={}x{}x{} levels={} "
+                 "pitch={} tile_mode={} array_mode={} guest_address={:#x}",
+                 info.guest_size, info.num_bits, dim_x, info.size.width, info.size.height,
+                 info.size.depth, info.resources.levels, info.pitch, u32(info.tile_mode),
+                 u32(info.array_mode), info.guest_address);
+    }
     cmdbuf.dispatch(dim_x, 1, 1);
 
     runtime.AccessBuffer(staging.buffer, staging.offset, info.guest_size,
@@ -280,7 +292,8 @@ std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* 
 void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buffer_copies,
                             const VideoCore::Buffer* out_buffer, u64 out_offset) {
     const auto& info = in_image.info;
-    if (!info.props.is_tiled) {
+    static const bool no_tiling = std::getenv("SHADPS4_NO_TILING") != nullptr;
+    if (no_tiling || !info.props.is_tiled) {
         for (auto& copy : buffer_copies) {
             copy.bufferOffset += out_offset;
         }
@@ -291,7 +304,8 @@ void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buff
     TilingInfo params{};
     params.bank_swizzle = info.bank_swizzle;
     params.micro_tiled_mips = info.micro_tiled_mips;
-    params.num_mips = static_cast<u32>(buffer_copies.size());
+    params.num_mips =
+        std::clamp<u32>(static_cast<u32>(buffer_copies.size()), 1, TilingInfo{}.mips.size());
     for (u32 mip = 0; mip < params.num_mips; ++mip) {
         auto& mip_info = params.mips[mip];
         mip_info = info.mips_layout[mip];
@@ -360,6 +374,14 @@ void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buff
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *pl_layout, 0, set_writes);
 
     const auto dim_x = (info.guest_size / (info.num_bits / 8)) / 64;
+    if (std::getenv("SHADPS4_TRACE_TILE") != nullptr) {
+        LOG_INFO(Render_Vulkan,
+                 "TileImage guest_size={:#x} bits={} dim_x={} extent={}x{}x{} levels={} "
+                 "pitch={} tile_mode={} array_mode={} guest_address={:#x}",
+                 info.guest_size, info.num_bits, dim_x, info.size.width, info.size.height,
+                 info.size.depth, info.resources.levels, info.pitch, u32(info.tile_mode),
+                 u32(info.array_mode), info.guest_address);
+    }
     cmdbuf.dispatch(dim_x, 1, 1);
 
     runtime.AccessBuffer(staging.buffer, staging.offset, info.guest_size,

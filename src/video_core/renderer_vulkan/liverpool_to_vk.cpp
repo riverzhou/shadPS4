@@ -445,7 +445,9 @@ vk::ComponentSwizzle ComponentSwizzle(AmdGpu::CompSwizzle comp_swizzle) {
     case AmdGpu::CompSwizzle::Alpha:
         return vk::ComponentSwizzle::eA;
     default:
-        UNREACHABLE();
+        LOG_WARNING(Render_Vulkan, "Unknown component swizzle {}, falling back to identity",
+                    static_cast<u32>(comp_swizzle));
+        return vk::ComponentSwizzle::eIdentity;
     }
 }
 

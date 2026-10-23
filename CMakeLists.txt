@@ -556,6 +556,8 @@ set(IME_LIB src/core/libraries/ime/error_dialog.cpp
 set(PAD_LIB src/core/libraries/pad/pad.cpp
             src/core/libraries/pad/pad.h
             src/core/libraries/pad/pad_errors.h
+            src/core/libraries/pad/pad_menu_state.cpp
+            src/core/libraries/pad/pad_menu_state.h
 )
 
 set(SYSTEM_GESTURE_LIB

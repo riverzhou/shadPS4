@@ -619,6 +619,11 @@ bool PipelineCache::RefreshComputeKey() {
     const auto cs_params = AmdGpu::GetParams(cs_pgm);
     std::tie(infos[0], modules[0], compute_key.value) =
         GetProgram(HwStage::Compute, SwStage::Compute, cs_params, binding);
+    if (std::getenv("SHADPS4_DUMP_SPV") != nullptr && infos[0] != nullptr) {
+        LOG_INFO(Render_Vulkan, "CS program pgm_hash={:#x} module={:#x}",
+                 infos[0]->pgm_hash,
+                 reinterpret_cast<u64>(static_cast<VkShaderModule>(modules[0])));
+    }
     return true;
 }
 
@@ -647,6 +652,11 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
 
     const auto name = GetShaderName(info.hw_stage, info.pgm_hash, perm_idx);
+    if (std::getenv("SHADPS4_DUMP_SPV") != nullptr) {
+        LOG_INFO(Render_Vulkan, "SPV program {} pgm_hash={:#x} module={:#x}", name,
+                 info.pgm_hash,
+                 reinterpret_cast<u64>(static_cast<VkShaderModule>(module)));
+    }
     Vulkan::SetObjectName(instance.GetDevice(), module, name);
     if (EmulatorSettings.IsShaderCollect()) {
         DebugState.CollectShader(name, info.sw_stage, module, spv, code,

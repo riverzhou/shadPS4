@@ -340,6 +340,12 @@ struct InputSettings {
     Setting<s32> camera_id{-1};
     Setting<bool> use_mice_as_mice{false};
     Setting<bool> use_keyboard_as_keyboard{false};
+    // Present a virtual connected pad when no physical controller is attached, so keyboard
+    // bindings still reach titles that ignore the pad while it reports "disconnected".
+    Setting<bool> emulate_pad_without_controller{true};
+    // Automated input (presses Cross/D-pad on its own). Debugging aid only: off by default and
+    // also gated by the SHADPS4_AUTO_INPUT environment variable for one-shot runs.
+    Setting<bool> auto_input{false};
 
     std::vector<OverrideItem> GetOverrideableFields() const {
         return std::vector<OverrideItem>{
@@ -358,6 +364,9 @@ struct InputSettings {
             make_override<InputSettings>("is_circle_enter", &InputSettings::is_circle_enter),
             make_override<InputSettings>("camera_id", &InputSettings::camera_id),
             make_override<InputSettings>("use_mice_as_mice", &InputSettings::use_mice_as_mice),
+            make_override<InputSettings>("emulate_pad_without_controller",
+                                         &InputSettings::emulate_pad_without_controller),
+            make_override<InputSettings>("auto_input", &InputSettings::auto_input),
             make_override<InputSettings>("use_keyboard_as_keyboard",
                                          &InputSettings::use_keyboard_as_keyboard)};
     }
@@ -367,7 +376,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(InputSettings, cursor_state, cursor_hide_time
                                    motion_controls_enabled, use_unified_input_config,
                                    default_controller_id, background_controller_input,
                                    ime_accessibility_enabled, ime_url_mail_short_panel, camera_id,
-                                   is_circle_enter, use_mice_as_mice, use_keyboard_as_keyboard)
+                                   is_circle_enter, use_mice_as_mice,
+                                   emulate_pad_without_controller, auto_input,
+                                   use_keyboard_as_keyboard)
 // -------------------------------
 // Audio settings
 // -------------------------------
@@ -793,6 +804,8 @@ public:
     SETTING_FORWARD_BOOL(m_input, CircleEnter, is_circle_enter)
     SETTING_FORWARD_BOOL(m_input, MiceUsedAsMice, use_mice_as_mice)
     SETTING_FORWARD_BOOL(m_input, KeyboardUsedAsKeyboard, use_keyboard_as_keyboard)
+    SETTING_FORWARD_BOOL(m_input, EmulatePadWithoutController, emulate_pad_without_controller)
+    SETTING_FORWARD_BOOL(m_input, AutoInput, auto_input)
 
     // Vulkan settings
     SETTING_FORWARD(m_vulkan, GpuId, gpu_id)

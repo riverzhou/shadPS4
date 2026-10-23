@@ -13,6 +13,7 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -192,6 +193,8 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     const auto& regs = liverpool->regs;
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
+    VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed : VideoCore::GpuTrace::Op::Draw, regs.num_indices,
+                     index_offset, reinterpret_cast<u64>(pipeline), 0);
     if (!pipeline) {
         return;
     }
@@ -323,15 +326,63 @@ void Rasterizer::DispatchDirect() {
 
     const auto& cs_program = liverpool->GetCsRegs();
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
+    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Dispatch,
+                     u64(cs_program.dim_x) << 40 | (u64(cs_program.dim_y) << 20) |
+                         u64(cs_program.dim_z),
+                     reinterpret_cast<u64>(pipeline));
     if (!pipeline) {
         return;
     }
 
+    // A dispatch with a zero group count does no work; some drivers still fault on it, so
+    // skip it entirely instead of recording an empty dispatch.
+    if (cs_program.dim_x == 0 || cs_program.dim_y == 0 || cs_program.dim_z == 0) {
+        static std::atomic<u32> zero_log{0};
+        if (zero_log.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_INFO(Render_Vulkan, "Skipping zero-group compute dispatch {}x{}x{}",
+                     cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+        }
+        return;
+    }
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    if (std::getenv("SHADPS4_SKIP_CS") != nullptr) {
+        const char* skip = std::getenv("SHADPS4_SKIP_CS");
+        u64 skip_hash = 0;
+        try {
+            skip_hash = std::stoull(skip, nullptr, 0);
+        } catch (...) {
+        }
+        if (skip_hash != 0 && cs.pgm_hash == skip_hash) {
+            static std::atomic<u32> skipped{0};
+            if (skipped.fetch_add(1, std::memory_order_relaxed) < 16) {
+                LOG_INFO(Render_Vulkan, "Skipping compute dispatch pgm={:#x}", cs.pgm_hash);
+            }
+            return;
+        }
+    }
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
         return;
     }
 
+    if (std::getenv("SHADPS4_LOG_CS_BINDINGS") != nullptr) {
+        LOG_INFO(Render_Vulkan, "CS bindings: pgm={:#x} dims={}x{}x{} buffers={} images={}",
+                 cs.pgm_hash, cs_program.dim_x, cs_program.dim_y, cs_program.dim_z,
+                 cs.buffers.size(), cs.images.size());
+        for (size_t i = 0; i < cs.buffers.size() && i < 8; ++i) {
+            const auto sharp = cs.buffers[i].GetSharp(cs);
+            LOG_INFO(Render_Vulkan, "  buf[{}] base={:#x} size={:#x} stride={}", i,
+                     sharp.base_address, sharp.GetSize(), sharp.GetStride());
+        }
+        for (size_t i = 0; i < cs.images.size() && i < 8; ++i) {
+            const auto sharp = cs.images[i].GetSharp(cs);
+            LOG_INFO(Render_Vulkan,
+                     "  img[{}] base={:#x} type={} fmt={} {}x{}x{} levels={} layers={} "
+                     "tile={} level_range={}..{}",
+                     i, sharp.Address(), sharp.GetType(), sharp.GetDataFmt(), sharp.width,
+                     sharp.height, sharp.depth, sharp.NumLevels(), sharp.NumLayers(),
+                     AmdGpu::NameOf(sharp.GetTileMode()), sharp.base_level, sharp.last_level);
+        }
+    }
     if (!BindResources(pipeline)) {
         return;
     }
@@ -429,8 +480,12 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
                           stage->samplers.size());
-        BindBuffers(*stage, binding, push_data);
-        BindTextures(*stage, binding);
+        if (!BindBuffers(*stage, binding, push_data)) {
+            return false;
+        }
+        if (!BindTextures(*stage, binding)) {
+            return false;
+        }
         uses_dma |= stage->uses_dma;
     }
 
@@ -753,8 +808,9 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     return true;
 }
 
-void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
+bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data) {
+    bool valid = true;
     const u64 alignment = instance.StorageMinAlignment();
     for (const auto& desc : stage.buffers) {
         const auto src_access =
@@ -811,8 +867,26 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
-            if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
-                buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+            if (vsharp.base_address == 0 || vsharp.GetSize() == 0 ||
+                vsharp.GetSize() >= 0x80000000ULL) {
+                if (vsharp.GetSize() >= 0x80000000ULL) {
+                    LOG_WARNING(Render, "GT7: rejecting huge buffer size {:#x} addr={:#x}",
+                                vsharp.GetSize(), vsharp.base_address);
+                    valid = false;
+                }
+                // Empty sharp: some compute shaders still read this binding as a descriptor
+                // table. A null descriptor with WHOLE_SIZE range is undefined behaviour on
+                // some drivers (observed as a GPU hang), so bind a small zeroed buffer.
+                if (std::getenv("SHADPS4_NULL_BUF_GUARD") != nullptr) {
+                    static constexpr u64 NullGuardSize = 64 * 1024;
+                    auto& stream = buffer_cache.GetStreamBuffer();
+                    const auto [zero_data, zero_off] = stream.Map(NullGuardSize, alignment);
+                    std::memset(zero_data, 0, NullGuardSize);
+                    stream.Commit();
+                    buffer_infos.emplace_back(stream.Handle(), zero_off, NullGuardSize);
+                } else {
+                    buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+                }
             } else {
                 const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
                 if (size != vsharp.GetSize()) {
@@ -854,9 +928,14 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
         set_write.pBufferInfo = &buffer_infos.back();
         ++binding.buffer;
     }
+    return valid;
 }
 
-void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
+bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
+    bool valid = true;
+    // Set when any sampled view uses a format without linear-filter support; the stage then
+    // falls back to point sampling (sampling such formats with a linear sampler is undefined).
+    bool needs_nearest_samplers = false;
     const u32 first_image_idx = image_infos.size();
     // To emulate storing to explicit mip levels, build a descriptor array with each mip level.
     boost::container::small_vector<u32, 8> image_descriptor_array_sizes;
@@ -866,6 +945,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const auto tsharp = image_desc.GetSharp(stage);
         const auto data_fmt = tsharp.GetDataFmt();
         const auto num_fmt = tsharp.GetNumberFmt();
+        if (tsharp.width > 16384 || tsharp.height > 16384 || tsharp.depth > 2048 ||
+            tsharp.NumLayers() > 256) {
+            LOG_WARNING(Render_Vulkan, "GT7: skipping huge image {}x{}x{} layers={}",
+                        tsharp.width, tsharp.height, tsharp.depth, tsharp.NumLayers());
+            valid = false;
+            image_bindings[num_images++].image_id = {};
+            image_descriptor_array_sizes.push_back(1);
+            continue;
+        }
         if (tsharp.Address() == 0 || data_fmt == AmdGpu::DataFormat::FormatInvalid) {
             image_bindings[num_images++].image_id = {};
             image_descriptor_array_sizes.push_back(1);
@@ -970,6 +1058,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
 
+            if (!is_storage) {
+                // Sampling a format without linear-filter support with a linear sampler is
+                // undefined; fall back to point sampling for the whole stage in that case.
+                const auto features = instance.GetFormatFeatureFlags(image_view.info.format);
+                if (!(features & vk::FormatFeatureFlagBits2::eSampledImageFilterLinear)) {
+                    needs_nearest_samplers = true;
+                }
+            }
+
             image_infos.emplace_back(VK_NULL_HANDLE, *image_view.image_view,
                                      image.backing->state.layout);
         }
@@ -1008,6 +1105,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                         liverpool->regs.ta_bc_base.Address());
             ssharp = AmdGpu::Sampler{};
         }
+        if (needs_nearest_samplers) {
+            ssharp.xy_mag_filter.Assign(AmdGpu::Filter::Point);
+            ssharp.xy_min_filter.Assign(AmdGpu::Filter::Point);
+        }
         const auto vk_sampler =
             texture_cache.GetSampler(ssharp, liverpool->regs.ta_bc_base, sampler.is_depth);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
@@ -1019,6 +1120,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         set_write.descriptorType = vk::DescriptorType::eSampler;
         set_write.pImageInfo = &image_infos.back();
     }
+    return valid;
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {

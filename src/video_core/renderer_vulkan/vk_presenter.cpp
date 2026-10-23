@@ -20,6 +20,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
@@ -841,6 +842,33 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    static const bool watchdog_requested = std::getenv("SHADPS4_GPU_WATCHDOG") != nullptr;
+    static bool watchdog_started = false;
+    if (watchdog_requested && !watchdog_started) {
+        watchdog_started = true;
+        StartGpuWatchdog();
+    }
+    // Debug switch: skip acquire/blit/present entirely to see if the swapchain path is what
+    // hangs the GPU (the window will not update while this is set).
+    static const bool no_present = std::getenv("SHADPS4_NO_PRESENT") != nullptr;
+    if (no_present) {
+        return;
+    }
+    if (std::getenv("SHADPS4_GPU_MEM_LOG") != nullptr) {
+        static u32 mem_log_frames = 0;
+        if (++mem_log_frames % 600 == 0) {
+            instance.LogMemoryUsage();
+        }
+    }
+    bool rd_active = false;
+        struct RdCaptureScope {
+        bool active;
+        ~RdCaptureScope() {
+            if (active) {
+                VideoCore::EndCaptureNow();
+            }
+        }
+    } rd_capture_scope{rd_active};
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -873,7 +901,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     ASSERT_MSG(reset_result == vk::Result::eSuccess,
                "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
 
-    ImGuiID dockId = ImGui::Core::NewFrame(is_reusing_frame);
+    // Debug switch: skip all ImGui calls (barriers and swapchain present stay enabled).
+    static const bool no_imgui = std::getenv("SHADPS4_NO_IMGUI") != nullptr;
+    ImGuiID dockId = no_imgui ? 0 : ImGui::Core::NewFrame(is_reusing_frame);
 
     const vk::Image swapchain_image = swapchain.Image();
     const vk::ImageView swapchain_image_view = swapchain.ImageView();
@@ -932,11 +962,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
         bool swapchain_copied_for_screenshot = false;
 
+        // Debug switch: drop the frame->image barrier (General -> ShaderReadOnlyOptimal) to
+        // test whether the layout transition of the presented frame is what hangs the GPU.
+        static const bool no_frame_barrier =
+            std::getenv("SHADPS4_NO_FRAME_BARRIER") != nullptr;
+        static const bool simple_present_barrier =
+            std::getenv("SHADPS4_SIMPLE_PRESENT_BARRIER") != nullptr;
+        const u32 pre_barrier_count =
+            simple_present_barrier ? 0u : (no_frame_barrier ? 1u : 2u);
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
                                vk::PipelineStageFlagBits::eColorAttachmentOutput |
                                    vk::PipelineStageFlagBits::eFragmentShader,
-                               {}, {}, {}, pre_barriers);
+                               {}, 0, nullptr, 0, nullptr, pre_barrier_count,
+                               pre_barriers.data());
 
+        if (!no_imgui) {
         { // Draw the game
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -979,7 +1019,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 };
 
                 ImGui::SetCursorPos(ImGui::GetCursorStartPos() + offset);
-                ImGui::Image(game_texture, size);
+                // Debug switch: skip blitting the game frame texture, keeping the rest of
+                // the ImGui composition and the swapchain path intact.
+                static const bool no_game_image =
+                    std::getenv("SHADPS4_NO_GAME_IMAGE") != nullptr;
+                if (!no_game_image) {
+                    ImGui::Image(game_texture, size);
+                }
 
                 if (EmulatorSettings.IsNullGPU()) {
                     Core::Devtools::Layer::DrawNullGpuNotice();
@@ -989,7 +1035,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             ImGui::PopStyleVar(3);
             ImGui::PopStyleColor();
         }
-        ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
+        // Debug switch: skip the ImGui composition pass, keeping acquire/present/barriers.
+        static const bool no_overlay = std::getenv("SHADPS4_NO_OVERLAY") != nullptr;
+        if (!no_overlay) {
+            ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
+        }
+        } // !no_imgui
 
         if (capture_with_overlays_count > 0) {
             auto& readback = pending_screenshot.emplace(
@@ -1027,10 +1078,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
         const vk::AccessFlags post_src_access_mask =
             swapchain_copied_for_screenshot ? vk::AccessFlagBits::eTransferRead
-                                            : vk::AccessFlagBits::eColorAttachmentWrite;
-        const vk::ImageLayout post_old_layout = swapchain_copied_for_screenshot
-                                                    ? vk::ImageLayout::eTransferSrcOptimal
-                                                    : vk::ImageLayout::eColorAttachmentOptimal;
+            : simple_present_barrier      ? vk::AccessFlagBits::eNone
+                                          : vk::AccessFlagBits::eColorAttachmentWrite;
+        const vk::ImageLayout post_old_layout =
+            swapchain_copied_for_screenshot ? vk::ImageLayout::eTransferSrcOptimal
+            : simple_present_barrier       ? vk::ImageLayout::eUndefined
+                                           : vk::ImageLayout::eColorAttachmentOptimal;
         const vk::ImageMemoryBarrier post_barrier{
             .srcAccessMask = post_src_access_mask,
             .dstAccessMask = vk::AccessFlagBits::eNone,
@@ -1067,20 +1120,84 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     SubmitInfo info{};
-    info.AddWait(swapchain.GetImageAcquiredSemaphore());
-    info.AddWait(frame->ready_semaphore, frame->ready_tick);
+    if (instance.HasDeviceCheckpoints()) {
+        static u64 checkpoint_marker = 0;
+        instance.SetCheckpoint(cmdbuf, ++checkpoint_marker);
+        VideoCore::GpuTrace::g_present_submitted.fetch_add(1, std::memory_order_relaxed);
+    }
+    static const bool no_acquire_wait = std::getenv("SHADPS4_NO_ACQUIRE_WAIT") != nullptr;
+    if (!no_acquire_wait) {
+        info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    }
+    static const bool no_frame_wait = std::getenv("SHADPS4_NO_FRAME_WAIT") != nullptr;
+    if (!no_frame_wait) {
+        info.AddWait(frame->ready_semaphore, frame->ready_tick);
+    }
+    if (std::getenv("SHADPS4_PRESENT_DEBUG") != nullptr) {
+        static u32 present_debug_frames = 0;
+        if (++present_debug_frames % 120 == 0) {
+            u64 ready_value = 0;
+            const auto [ready_result, value] =
+                instance.GetDevice().getSemaphoreCounterValue(frame->ready_semaphore);
+            if (ready_result == vk::Result::eSuccess) {
+                ready_value = value;
+            }
+            LOG_INFO(Render_Vulkan,
+                     "Present: frame_ready_tick={} semaphore_value={} wait_enabled={}",
+                     frame->ready_tick, ready_value, !no_frame_wait);
+        }
+    }
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
     // Present to swapchain.
-    {
+    static const bool no_present_khr = std::getenv("SHADPS4_NO_PRESENT_KHR") != nullptr;
+    if (!no_present_khr) {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
         if (!swapchain.Present()) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }
 
+    static const bool present_wait = std::getenv("SHADPS4_PRESENT_WAIT") != nullptr;
+    if (present_wait) {
+        // Debug switch: pace the CPU on the present submit's fence, testing whether the GPU
+        // hang is caused by the CPU running too far ahead of the presentation queue.
+        const auto wait_result =
+            instance.GetDevice().waitForFences(frame->present_done, true, UINT64_MAX);
+        if (wait_result != vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan, "Present wait fence returned {}",
+                        vk::to_string(wait_result));
+        }
+    }
+    static const bool watchdog_enabled = std::getenv("SHADPS4_GPU_WATCHDOG") != nullptr;
+    if (instance.HasDeviceCheckpoints() && !watchdog_enabled &&
+        !VideoCore::GpuTrace::g_device_lost.load()) {
+        // Detect the exact frame where the GPU stops making progress: the checkpoint marker
+        // of the last completed submission stops advancing while the CPU keeps submitting.
+        static u64 last_reached = 0;
+        static u64 stuck_frames = 0;
+        static bool stall_reported = false;
+        const auto [reached_count, reached_marker] =
+            instance.QueryCheckpoints(instance.GetGraphicsQueue());
+        if (reached_marker > last_reached) {
+            last_reached = reached_marker;
+            stuck_frames = 0;
+            stall_reported = false;
+        } else if (++stuck_frames == 8 && !stall_reported) {
+            stall_reported = true;
+            LOG_CRITICAL(Render_Vulkan,
+                         "GPU stall detected: last completed checkpoint={} (stuck {} frames)",
+                         last_reached, stuck_frames);
+            VideoCore::GpuTrace::Dump("gpu stall");
+        }
+    }
+    if (const char* throttle = std::getenv("SHADPS4_PRESENT_THROTTLE_MS"); throttle != nullptr) {
+        // Debug switch: pace presentations to test whether the GPU hang is time- or
+        // submission-count driven (and as a possible workaround on broken drivers).
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoll(throttle)));
+    }
     free_frame();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
@@ -1136,6 +1253,44 @@ void Presenter::SetExpectedGameSize(s32 width, s32 height) {
     } else {
         expected_frame_height = static_cast<s32>(width / expected_ratio);
     }
+}
+
+void Presenter::StartGpuWatchdog() {
+    if (!instance.HasDeviceCheckpoints()) {
+        LOG_INFO(Render_Vulkan, "GPU watchdog: device checkpoints unavailable, not starting");
+        return;
+    }
+    std::thread([this] {
+        using namespace std::chrono;
+        u64 last_reached = 0;
+        auto last_change = steady_clock::now();
+        bool reported = false;
+        for (;;) {
+            std::this_thread::sleep_for(milliseconds(100));
+            if (VideoCore::GpuTrace::g_device_lost.load(std::memory_order_relaxed)) {
+                return;
+            }
+            const auto [count, reached] = instance.QueryCheckpoints(instance.GetGraphicsQueue());
+            const u64 submitted = VideoCore::GpuTrace::g_present_submitted.load(
+                std::memory_order_relaxed);
+            if (reached > last_reached) {
+                last_reached = reached;
+                last_change = steady_clock::now();
+                reported = false;
+                continue;
+            }
+            const auto idle_ms =
+                duration_cast<milliseconds>(steady_clock::now() - last_change).count();
+            if (!reported && idle_ms > 1800 && last_reached > 0) {
+                reported = true;
+                LOG_CRITICAL(Render_Vulkan,
+                             "GPU watchdog: no checkpoint progress for {} ms "
+                             "(last_reached={} submitted={} pending={})",
+                             idle_ms, last_reached, submitted, submitted - last_reached);
+                VideoCore::GpuTrace::Dump("watchdog: GPU stopped completing submissions");
+            }
+        }
+    }).detach();
 }
 
 } // namespace Vulkan

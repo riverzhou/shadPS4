@@ -13,7 +13,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 11u;
-static constexpr u32 ShaderMetaVersion = 6u;
+static constexpr u32 ShaderMetaVersion = 7u;
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
 
@@ -388,7 +388,23 @@ namespace Shader {
 void Info::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer info{ar};
 
-    info.Write(this, sizeof(InfoPersistent));
+    // Serialize field by field: InfoPersistent holds boost::container::static_vector members
+    // whose internal storage pointer must not be copied verbatim across processes.
+    info.Write(buffers);
+    info.Write(images);
+    info.Write(samplers);
+    info.Write(fmasks);
+    info.Write(fetch_shader_sgpr_base);
+    info.Write(shared_memory_scratch_size);
+    info.Write(pgm_hash);
+    info.Write(tess_consts_dword_offset);
+    info.Write(tess_consts_ptr_base);
+    info.Write(hw_stage);
+    info.Write(sw_stage);
+    info.Write(mrt_mask);
+    info.Write(has_fetch_shader);
+    info.Write(has_bitwise_xor);
+    info.Write(uses_dma);
     info.Write(flattened_ud_buf);
     srt_info.Serialize(ar);
 }
@@ -396,7 +412,21 @@ void Info::Serialize(Serialization::Archive& ar) const {
 bool Info::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader info{ar};
 
-    info.Read(this, sizeof(Shader::InfoPersistent));
+    info.Read(buffers);
+    info.Read(images);
+    info.Read(samplers);
+    info.Read(fmasks);
+    info.Read(fetch_shader_sgpr_base);
+    info.Read(shared_memory_scratch_size);
+    info.Read(pgm_hash);
+    info.Read(tess_consts_dword_offset);
+    info.Read(tess_consts_ptr_base);
+    info.Read(hw_stage);
+    info.Read(sw_stage);
+    info.Read(mrt_mask);
+    info.Read(has_fetch_shader);
+    info.Read(has_bitwise_xor);
+    info.Read(uses_dma);
     info.Read(flattened_ud_buf);
 
     return srt_info.Deserialize(ar);

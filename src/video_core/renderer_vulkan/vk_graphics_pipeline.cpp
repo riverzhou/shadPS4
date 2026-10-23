@@ -41,6 +41,8 @@ GraphicsPipeline::GraphicsPipeline(
 
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
+    LOG_INFO(Render_Vulkan, "GraphicsPipeline ptr={:#x} vs={:#x} fs={:#x}",
+             reinterpret_cast<uintptr_t>(this), key.stage_hashes[0], key.stage_hashes[1]);
     BuildDescSetLayout(preloading);
     const auto debug_str = GetDebugString();
 

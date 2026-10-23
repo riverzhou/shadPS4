@@ -99,6 +99,10 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
+
+    /// Starts a detached watchdog that queries device diagnostic checkpoints and dumps GPU
+    /// state when submissions stop completing (i.e. the GPU hung before the TDR fires).
+    void StartGpuWatchdog();
     Frame* PrepareLastFrame();
 
 private:

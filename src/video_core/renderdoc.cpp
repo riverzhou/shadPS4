@@ -86,7 +86,7 @@ void LoadRenderDoc() {
     if (rdoc_api) {
         // Disable default capture keys as they suppose to trigger present-to-present capturing
         // and it is not what we want
-        rdoc_api->SetCaptureKeys(nullptr, 0);
+        // rdoc_api->SetCaptureKeys(nullptr, 0);  // keep F12 for manual capture
 
         // Also remove rdoc crash handler
         rdoc_api->UnloadCrashHandler();
@@ -118,6 +118,18 @@ void EndCapture() {
 void TriggerCapture() {
     if (capture_state == CaptureState::Idle) {
         capture_state = CaptureState::Triggered;
+    }
+}
+
+void BeginCaptureNow() {
+    if (rdoc_api) {
+        rdoc_api->StartFrameCapture(nullptr, nullptr);
+    }
+}
+
+void EndCaptureNow() {
+    if (rdoc_api) {
+        rdoc_api->EndFrameCapture(nullptr, nullptr);
     }
 }
 

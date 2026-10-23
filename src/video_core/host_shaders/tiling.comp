@@ -418,11 +418,14 @@ uint32_t ComputeSurfaceAddrFromCoordMacroTiled(uint32_t x, uint32_t y, uint32_t 
 
 uint GetMipLevel(inout uint texel) {
     uint mip = 0;
-    uint mip_size = info.mips[mip].size / BYTES_PER_PIXEL;
-    while (texel >= mip_size && mip < info.num_mips) {
+    uint num_mips = clamp(info.num_mips, 1u, 16u);
+    uint mip_size = max(info.mips[0].size / BYTES_PER_PIXEL, 1u);
+    // Keep mip inside the array: a texel beyond the summed mip sizes used to walk one past
+    // num_mips, and the garbage pitch/height that followed produced a modulo by zero.
+    while (texel >= mip_size && mip + 1 < num_mips) {
         texel -= mip_size;
         ++mip;
-        mip_size = info.mips[mip].size / BYTES_PER_PIXEL;
+        mip_size = max(info.mips[mip].size / BYTES_PER_PIXEL, 1u);
     }
     return mip;
 }
@@ -430,8 +433,8 @@ uint GetMipLevel(inout uint texel) {
 void main() {
     uint texel = gl_GlobalInvocationID.x;
     uint mip = GetMipLevel(texel);
-    uint pitch = info.mips[mip].pitch_height & 0xffffu;
-    uint height = info.mips[mip].pitch_height >> 16;
+    uint pitch = max(info.mips[mip].pitch_height & 0xffffu, 1u);
+    uint height = max(info.mips[mip].pitch_height >> 16, 1u);
     uint tiled_offset = info.mips[mip].offset;
     uint x = texel % pitch;
     uint y = (texel / pitch) % height;

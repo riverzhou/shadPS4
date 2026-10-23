@@ -118,9 +118,9 @@ private:
 
     bool FilterDraw();
 
-    void BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
+    bool BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                      Shader::PushData& push_data);
-    void BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding);
+    bool BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding);
     bool BindResources(const Pipeline* pipeline);
 
     void BindVertexBuffers(const GraphicsPipeline* pipeline);

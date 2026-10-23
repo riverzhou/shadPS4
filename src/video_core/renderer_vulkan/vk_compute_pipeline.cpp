@@ -19,6 +19,9 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
       compute_key{compute_key_} {
     auto& info = stages[int(Shader::SwStage::Compute)];
     info = &info_;
+    LOG_INFO(Render_Vulkan, "ComputePipeline ptr={:#x} key={:#x} module={:#x}",
+             reinterpret_cast<uintptr_t>(this), compute_key.value,
+             reinterpret_cast<u64>(static_cast<VkShaderModule>(module)));
     const auto debug_str = GetDebugString();
 
     const vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size_ci = {

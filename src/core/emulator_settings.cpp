@@ -586,6 +586,8 @@ bool EmulatorSettingsImpl::TransferSettings() {
         setFromToml(s.cursor_hide_timeout, input, "cursorHideTimeout");
         setFromToml(s.use_special_pad, input, "useSpecialPad");
         setFromToml(s.special_pad_class, input, "specialPadClass");
+        setFromToml(s.emulate_pad_without_controller, input, "emulatePadWithoutController");
+        setFromToml(s.auto_input, input, "autoInput");
         setFromToml(s.motion_controls_enabled, input, "isMotionControlsEnabled");
         setFromToml(s.use_unified_input_config, input, "useUnifiedInputConfig");
         setFromToml(s.background_controller_input, input, "backgroundControllerInput");

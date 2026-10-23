@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <string_view>
 
 #include "common/assert.h"
@@ -183,7 +184,7 @@ constexpr u32 GetAltNumBanks(MacroTileMode mode) {
     case MacroTileMode::Mode_1x8_16:
         return 16;
     default:
-        UNREACHABLE_MSG("Unknown macro tile mode = {}", u32(mode));
+        return 0;
     }
 }
 
@@ -234,7 +235,7 @@ constexpr ArrayMode GetArrayMode(TileMode tile_mode) {
     case TileMode::DisplayLinearGeneral:
         return ArrayMode::ArrayLinearGeneral;
     default:
-        UNREACHABLE_MSG("Unknown tile mode = {}", u32(tile_mode));
+        return ArrayMode::Array2DTiledThin1;
     }
 }
 
@@ -273,7 +274,14 @@ constexpr MicroTileMode GetMicroTileMode(TileMode tile_mode) {
     case TileMode::Thick3DXThick:
         return MicroTileMode::Thick;
     default:
-        UNREACHABLE_MSG("Unknown tile mode = {}", u32(tile_mode));
+        // Games can hand us a reserved/unknown tile mode (observed value 27 in GT7 race
+        // scenes). Terminating the emulator there is far worse than mis-tiling one surface,
+        // so fall back to the display (linear) mode and warn once.
+        static std::atomic<u32> unknown_tile_warned{0};
+        if (unknown_tile_warned.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_WARNING(Render, "Unknown tile mode {}, assuming Display", u32(tile_mode));
+        }
+        return MicroTileMode::Display;
     }
 }
 

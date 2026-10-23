@@ -45,8 +45,12 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
 
     const vk::SamplerCreateInfo sampler_ci = {
         .pNext = custom_color ? &*custom_color : nullptr,
-        .magFilter = LiverpoolToVK::Filter(sampler.xy_mag_filter),
-        .minFilter = LiverpoolToVK::Filter(sampler.xy_min_filter),
+        .magFilter = std::getenv("SHADPS4_FORCE_NEAREST") != nullptr
+                         ? vk::Filter::eNearest
+                         : LiverpoolToVK::Filter(sampler.xy_mag_filter),
+        .minFilter = std::getenv("SHADPS4_FORCE_NEAREST") != nullptr
+                         ? vk::Filter::eNearest
+                         : LiverpoolToVK::Filter(sampler.xy_min_filter),
         .mipmapMode = LiverpoolToVK::MipFilter(sampler.mip_filter),
         .addressModeU = LiverpoolToVK::ClampMode(sampler.clamp_x),
         .addressModeV = LiverpoolToVK::ClampMode(sampler.clamp_y),

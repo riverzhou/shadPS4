@@ -3,6 +3,9 @@
 
 #include <boost/preprocessor/stringize.hpp>
 
+#include <algorithm>
+#include <cstdlib>
+
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
@@ -269,10 +272,13 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
         default:
             UNREACHABLE_MSG("Wrong PM4 type {}", type);
             break;
-        case 0:
-            UNREACHABLE_MSG("Unimplemented PM4 type 0, base reg: {}, size: {}",
-                            header->type0.base.Value(), header->type0.NumWords());
-            break;
+        case 0: {
+            LOG_WARNING(Render, "Skipping PM4 type 0, base reg: {}, size: {}",
+                        header->type0.base.Value(), header->type0.NumWords());
+            const u32 words = header->type0.NumWords();
+            dcb = NextPacket(dcb, words + 1);
+            continue;
+        }
         case 2:
             // Type-2 packet are used for padding purposes
             dcb = NextPacket(dcb, 1);
@@ -458,7 +464,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 rasterizer->ScopeMarker("gfx:{}:DrawIndex2", fmt::make_format_args(cmd_address),
-                                        [&] { rasterizer->Draw(true); });
+                                        [&] { static const bool no_draws = std::getenv("SHADPS4_NO_DRAWS") != nullptr; if (!no_draws) { rasterizer->Draw(true); } });
                 break;
             }
             case PM4ItOpcode::DrawIndexOffset2: {
@@ -476,13 +482,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 rasterizer->ScopeMarker(
                     "gfx:{}:DrawIndexOffset2", fmt::make_format_args(cmd_address),
-                    [&] { rasterizer->Draw(true, draw_index_off->index_offset); });
+                    [&] { static const bool no_draws = std::getenv("SHADPS4_NO_DRAWS") != nullptr; if (!no_draws) { rasterizer->Draw(true, draw_index_off->index_offset); } });
                 break;
             }
             case PM4ItOpcode::DrawIndexAuto: {
                 const auto* draw_index = reinterpret_cast<const PM4CmdDrawIndexAuto*>(header);
                 regs.num_indices = draw_index->index_count;
                 regs.draw_initiator = draw_index->draw_initiator;
+                if (std::getenv("SHADPS4_GPU_WATCH") != nullptr &&
+                    draw_index->index_count > (1u << 20)) {
+                    LOG_WARNING(Render, "Suspicious DrawIndexAuto count={} initiator={:#x}",
+                                draw_index->index_count, draw_index->draw_initiator);
+                }
                 if (DebugState.DumpingCurrentReg()) {
                     DebugState.PushRegsDump(base_addr, reinterpret_cast<uintptr_t>(header), regs);
                 }
@@ -491,7 +502,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 rasterizer->ScopeMarker("gfx:{}:DrawIndexAuto", fmt::make_format_args(cmd_address),
-                                        [&] { rasterizer->Draw(false); });
+                                        [&] { static const bool no_draws = std::getenv("SHADPS4_NO_DRAWS") != nullptr; if (!no_draws) { rasterizer->Draw(false); } });
                 break;
             }
             case PM4ItOpcode::DrawIndirect: {
@@ -627,11 +638,26 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 cs_program.dim_y = dispatch_direct->dim_y;
                 cs_program.dim_z = dispatch_direct->dim_z;
                 cs_program.dispatch_initiator = dispatch_direct->dispatch_initiator;
+                if (std::getenv("SHADPS4_GPU_WATCH") != nullptr) {
+                    const u64 groups = u64(cs_program.dim_x) * cs_program.dim_y * cs_program.dim_z;
+                    if (groups > (1ull << 20)) {
+                        LOG_WARNING(Render,
+                                    "Suspicious dispatch {}x{}x{} groups={} initiator={:#x} addr={}",
+                                    cs_program.dim_x, cs_program.dim_y, cs_program.dim_z, groups,
+                                    cs_program.dispatch_initiator,
+                                    fmt::ptr(reinterpret_cast<const void*>(header)));
+                    }
+                }
                 if (DebugState.DumpingCurrentReg()) {
                     DebugState.PushRegsDumpCompute(base_addr, reinterpret_cast<uintptr_t>(header),
                                                    cs_program);
                 }
                 if (!rasterizer || (cs_program.dispatch_initiator & 1) == 0) {
+                    break;
+                }
+                // Debug switch: skip compute dispatch to test whether it causes GPU hangs.
+                static const bool no_compute = std::getenv("SHADPS4_NO_COMPUTE") != nullptr;
+                if (no_compute) {
                     break;
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
@@ -650,6 +676,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                                                    cs_program);
                 }
                 if (!rasterizer || (cs_program.dispatch_initiator & 1) == 0) {
+                    break;
+                }
+                static const bool no_compute_indirect =
+                    std::getenv("SHADPS4_NO_COMPUTE") != nullptr;
+                if (no_compute_indirect) {
                     break;
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
@@ -920,16 +951,20 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
 
     auto base_addr = reinterpret_cast<VAddr>(acb.data());
     size_t acb_size = acb.size_bytes();
+    const auto packet_dwords = [](const PM4Header* h) -> u32 {
+        const u32 t = h->type.Value();
+        return t == 0 ? h->type0.NumWords() : (t == 2 ? 1u : h->type3.NumWords() + 1);
+    };
     while (!acb.empty()) {
         ProcessCommands();
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
-        u32 next_dw_off = header->type3.NumWords() + 1;
+        u32 next_dw_off = packet_dwords(header);
 
         // If we have a buffered packet, use it.
         if (queue.tmp_dwords > 0) [[unlikely]] {
             header = reinterpret_cast<const PM4Header*>(queue.tmp_packet.data());
-            next_dw_off = header->type3.NumWords() + 1 - queue.tmp_dwords;
+            next_dw_off = packet_dwords(header) - queue.tmp_dwords;
             std::memcpy(queue.tmp_packet.data() + queue.tmp_dwords, acb.data(),
                         next_dw_off * sizeof(u32));
             queue.tmp_dwords = 0;
@@ -946,9 +981,16 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
 
-        if (header->type == 2) {
+        const u32 type = header->type.Value();
+        if (type == 0) {
+            LOG_WARNING(Render,
+                        "[GT7] PM4 type 0: base={:#x} count={} next_dw={} acb_size={:#x}",
+                        header->type0.base.Value(), header->type0.count.Value(), next_dw_off,
+                        acb.size_bytes());
+        }
+
+        if (type == 2) {
             // Type-2 packet are used for padding purposes
-            next_dw_off = 1;
             acb = NextPacket(acb, next_dw_off);
             if constexpr (!is_indirect) {
                 *queue.read_addr += next_dw_off;
@@ -957,9 +999,14 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             continue;
         }
 
-        if (header->type != 3) {
+        if (type != 3) {
             // No other types of packets were spotted so far
-            UNREACHABLE_MSG("Invalid PM4 type {}", header->type.Value());
+            LOG_ERROR(Render, "[GT7] invalid PM4 type {} acb_size={:#x}", type, acb.size_bytes());
+            const auto n = std::min<size_t>(acb.size(), 32);
+            for (size_t i = 0; i < n; ++i) {
+                LOG_ERROR(Render, "  PM4[{:02}] = {:#010x}", i, acb[i]);
+            }
+            UNREACHABLE_MSG("Invalid PM4 type {}", type);
         }
 
         const PM4ItOpcode opcode = header->type3.opcode;

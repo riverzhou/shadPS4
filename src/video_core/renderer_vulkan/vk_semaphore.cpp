@@ -36,6 +36,7 @@ void Semaphore::Refresh() {
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
         ASSERT_MSG(counter_result == vk::Result::eSuccess,
                    "Failed to get master semaphore value: {}", vk::to_string(counter_result));
+
         counter = cntr;
         if (counter < this_tick) {
             return;

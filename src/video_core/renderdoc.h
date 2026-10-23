@@ -20,6 +20,8 @@ void EndCapture();
 
 /// Triggers capturing process.
 void TriggerCapture();
+void BeginCaptureNow();
+void EndCaptureNow();
 
 /// Sets output directory for captures
 void SetOutputDir(const std::filesystem::path& path, const std::string& prefix);

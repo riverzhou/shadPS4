@@ -5,6 +5,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/blit_helper.h"
@@ -110,6 +111,12 @@ void Runtime::TickFrame() {
 
 void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
                          std::span<const vk::BufferCopy> copies) {
+    // Debug switch: skip all copy work to see whether guest copies are what hangs the GPU.
+    static const bool no_copies = std::getenv("SHADPS4_NO_COPIES") != nullptr;
+    if (no_copies) {
+        return;
+    }
+
     scheduler.EndRendering();
 
     bool needs_flush{};
@@ -122,6 +129,11 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
     }
 
     const auto cmdbuf = scheduler.CommandBuffer();
+    if (!copies.empty()) {
+        VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::CopyBuffer, copies.size(),
+                                    copies.front().size, copies.front().srcOffset,
+                                    copies.front().dstOffset);
+    }
     cmdbuf.copyBuffer(src->Handle(), dst->Handle(), copies);
 
     for (const auto& copy : copies) {
@@ -225,7 +237,16 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
 }
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
+    // Debug switch: skip all copy work to see whether guest copies are what hangs the GPU.
+    static const bool no_copies = std::getenv("SHADPS4_NO_COPIES") != nullptr;
+    if (no_copies) {
+        return;
+    }
+
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
+    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::CopyImage, num_mips,
+                                u64(src->info.size.width) << 32 | src->info.size.height,
+                                reinterpret_cast<u64>(src), reinterpret_cast<u64>(dst));
 
     // Format mismatch warning (safe but useful)
     if (src->info.pixel_format != dst->info.pixel_format) {
@@ -324,6 +345,10 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
 
 void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                                   const VideoCore::Buffer* buffer, u64 offset) {
+    static const bool no_copies = std::getenv("SHADPS4_NO_COPIES") != nullptr;
+    if (no_copies) {
+        return;
+    }
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
 

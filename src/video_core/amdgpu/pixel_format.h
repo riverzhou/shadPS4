@@ -415,6 +415,9 @@ constexpr u32 NumBitsPerBlock(DataFormat format) noexcept {
 
 constexpr u32 NumBitsPerElement(DataFormat format) noexcept {
     const u32 index = static_cast<u32>(format);
+    if (index >= std::size(BITS_PER_ELEMENT)) {
+        return 0;
+    }
     return BITS_PER_ELEMENT[index];
 }
 

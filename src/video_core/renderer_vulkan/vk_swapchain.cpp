@@ -9,6 +9,7 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
 namespace Vulkan {
@@ -110,6 +111,8 @@ bool Swapchain::AcquireNextImage() {
 
     switch (result) {
     case vk::Result::eSuccess:
+        VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Acquire, image_index,
+                                    frame_index);
         break;
     case vk::Result::eSuboptimalKHR:
     case vk::Result::eErrorSurfaceLostKHR:
@@ -137,6 +140,8 @@ bool Swapchain::Present() {
     };
 
     auto result = instance.GetPresentQueue().presentKHR(present_info);
+    VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Present, image_index,
+                                static_cast<u32>(result));
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else {
@@ -238,6 +243,14 @@ void Swapchain::SetSurfaceProperties() {
     image_count = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0) {
         image_count = std::min(image_count, capabilities.maxImageCount);
+    }
+    if (const char* env_images = std::getenv("SHADPS4_SWAPCHAIN_IMAGES"); env_images != nullptr) {
+        // Debug override: some drivers hang with a particular swapchain depth.
+        const u32 requested = static_cast<u32>(std::max(1, std::atoi(env_images)));
+        image_count = std::clamp(requested, capabilities.minImageCount,
+                                 capabilities.maxImageCount > 0 ? capabilities.maxImageCount
+                                                                : requested);
+        LOG_INFO(Render_Vulkan, "Swapchain image count overridden to {}", image_count);
     }
 
     // Prefer identity transform if possible

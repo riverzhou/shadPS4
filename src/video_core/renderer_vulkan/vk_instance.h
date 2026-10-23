@@ -39,6 +39,33 @@ public:
     }
 
     /// Returns the current physical device
+    bool HasDeviceFault() const {
+        return device_fault;
+    }
+
+    /// Queries VK_EXT_device_fault and logs the reported fault, if any.
+    /// Called from any submit path that observed VK_ERROR_DEVICE_LOST.
+    void ReportDeviceFault(const char* site) const;
+
+    /// Logs VMA heap usage/budget, used to spot memory growth before a device loss.
+    void LogMemoryUsage() const;
+
+    /// Returns the format feature flags for a Vulkan format.
+    [[nodiscard]] vk::FormatFeatureFlags2 GetFormatFeatureFlags(vk::Format format) const;
+
+    /// True when VK_NV_device_diagnostic_checkpoints is available and enabled.
+    [[nodiscard]] bool HasDeviceCheckpoints() const {
+        return device_checkpoints;
+    }
+
+    /// Records a diagnostic checkpoint marker into a command buffer before submission.
+    void SetCheckpoint(vk::CommandBuffer cmdbuf, u64 marker) const;
+
+    /// Queries the checkpoint markers the GPU reached so far (safe only while the device is
+    /// healthy; querying after device loss faults inside the NVIDIA driver).
+    /// Returns {reached_count, last_marker}.
+    std::pair<u32, u64> QueryCheckpoints(vk::Queue queue) const;
+
     vk::PhysicalDevice GetPhysicalDevice() const {
         return physical_device;
     }
@@ -483,7 +510,7 @@ private:
     void CollectToolingInfo() const;
 
     /// Gets the supported feature flags for a format.
-    [[nodiscard]] vk::FormatFeatureFlags2 GetFormatFeatureFlags(vk::Format format) const;
+
 
 private:
     vk::UniqueInstance instance;
@@ -495,6 +522,11 @@ private:
     vk::PhysicalDeviceVulkan12Properties vk12_props;
     vk::PhysicalDeviceVulkan13Properties vk13_props;
     vk::PhysicalDevicePushDescriptorPropertiesKHR push_descriptor_props;
+    bool device_fault{};
+    // Cached at device creation: calling vkGetDeviceProcAddr on a lost device faults inside
+    // the NVIDIA driver, so the entry point must be resolved while the device is healthy.
+    PFN_vkGetDeviceFaultInfoEXT device_fault_info{};
+    bool device_checkpoints{};
     vk::PhysicalDeviceFeatures features;
     vk::PhysicalDeviceVulkan12Features vk12_features;
     vk::PhysicalDeviceVulkan13Features vk13_features;

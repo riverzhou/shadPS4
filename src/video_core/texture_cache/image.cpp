@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <memory>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -101,31 +102,56 @@ void UniqueImage::Destroy() {
 }
 
 void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
-    this->image_ci = image_ci;
+    vk::ImageCreateInfo ci = image_ci;
+    const bool huge = ci.extent.width > 16384 || ci.extent.height > 16384 ||
+                      ci.extent.depth > 2048 || ci.arrayLayers > 256 ||
+                      ci.mipLevels > 16;
+    if (huge) {
+        LOG_WARNING(Render_Vulkan,
+                    "GT7: invalid image {}x{}x{} layers={} mips={} -> dummy",
+                    ci.extent.width, ci.extent.height, ci.extent.depth, ci.arrayLayers,
+                    ci.mipLevels);
+        ci.extent = vk::Extent3D{1, 1, 1};
+        ci.mipLevels = 1;
+        ci.format = vk::Format::eR8G8B8A8Unorm;
+    }
+    this->image_ci = ci;
     ASSERT(!image);
     VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        .requiredFlags = 0,
-        .preferredFlags = 0,
-        .pool = VK_NULL_HANDLE,
-        .pUserData = nullptr,
     };
-
-    const VkImageCreateInfo image_ci_unsafe = static_cast<VkImageCreateInfo>(image_ci);
+    const VkImageCreateInfo image_ci_unsafe = static_cast<VkImageCreateInfo>(ci);
     VkImage unsafe_image{};
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+    if (result != VK_SUCCESS && !huge) {
+        LOG_WARNING(Render_Vulkan, "Allocating image of size {} bytes over budget.", alloc_info.size);
         alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
-        LOG_WARNING(Render_Vulkan, "Allocating image of size {} bytes over budget.",
-                    alloc_info.size);
-        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
+                                &allocation, &alloc_info);
+    }
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(Render_Vulkan, "GT7: image create failed, using 1x1 dummy");
+        vk::ImageCreateInfo dummy{};
+        dummy.imageType = vk::ImageType::e2D;
+        dummy.format = vk::Format::eR8G8B8A8Unorm;
+        dummy.extent = vk::Extent3D{1, 1, 1};
+        dummy.mipLevels = 1;
+        dummy.arrayLayers = 1;
+        dummy.samples = vk::SampleCountFlagBits::e1;
+        dummy.tiling = vk::ImageTiling::eOptimal;
+        dummy.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
+                       vk::ImageUsageFlagBits::eTransferDst;
+        dummy.sharingMode = vk::SharingMode::eExclusive;
+        dummy.initialLayout = vk::ImageLayout::eUndefined;
+        this->image_ci = dummy;
+        const VkImageCreateInfo dummy_unsafe = static_cast<VkImageCreateInfo>(dummy);
+        result = vmaCreateImage(allocator, &dummy_unsafe, &alloc_ci, &unsafe_image, &allocation,
                                 &alloc_info);
     }
-    ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
-               vk::to_string(vk::Result{result}));
+    ASSERT_MSG(result == VK_SUCCESS, "Failed dummy image");
     image = vk::Image{unsafe_image};
     size_bytes = alloc_info.size;
 }
@@ -196,6 +222,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
 
+
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
     backing->image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
@@ -247,13 +274,23 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
         // Otherwise all subresources need to be set to the same state so we can use a full
         // resource transition for the next time.
         const u32 start_mip = needs_partial_transition ? subres_range->base.level : u16{0};
-        const u32 end_mip = needs_partial_transition
-                                ? subres_range->base.level + subres_range->extent.levels
-                                : info.resources.levels;
+        u32 end_mip = needs_partial_transition
+                          ? subres_range->base.level + subres_range->extent.levels
+                          : info.resources.levels;
         const u32 start_layer = needs_partial_transition ? subres_range->base.layer : u16{0};
-        const u32 end_layer = needs_partial_transition
-                                  ? subres_range->base.layer + subres_range->extent.layers
-                                  : info.resources.layers;
+        u32 end_layer = needs_partial_transition
+                            ? subres_range->base.layer + subres_range->extent.layers
+                            : info.resources.layers;
+        if (end_mip > info.resources.levels || end_layer > info.resources.layers) {
+            // A guest view can reference levels/layers the backing image does not have; clamp
+            // instead of asserting so the rest of the frame can still be processed.
+            LOG_WARNING(Render_Vulkan,
+                        "Transit range exceeds image: mips {}-{} of {}, layers {}-{} of {}",
+                        start_mip, end_mip, info.resources.levels, start_layer, end_layer,
+                        info.resources.layers);
+            end_mip = std::min<u32>(end_mip, info.resources.levels);
+            end_layer = std::min<u32>(end_layer, info.resources.layers);
+        }
         for (u32 mip = start_mip; mip < end_mip; ++mip) {
             for (u32 layer = start_layer; layer < end_layer; ++layer) {
                 // NOTE: these loops may produce a lot of small barriers.

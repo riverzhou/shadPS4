@@ -10,7 +10,10 @@
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
+#include <cstdlib>
+
 #include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/gpu_trace.h"
 #include "video_core/buffer_cache/memory_tracker.h"
 #include "video_core/buffer_cache/region_definitions.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
@@ -327,6 +330,15 @@ void BufferCache::SynchronizeDmaBuffers() {
     }
 }
 
+static void LogArenaCount(size_t count) {
+    // Track sparse arena growth; a driver-side limit on sparse buffers would show up here.
+    static size_t last_logged = 0;
+    if (count >= last_logged + 128) {
+        last_logged = count;
+        LOG_INFO(Render, "Sparse arenas created: {}", count);
+    }
+}
+
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
@@ -342,6 +354,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
             const auto* new_arena =
                 &arenas.emplace_back(instance, base_block << block_shift,
                                      num_pages << ARENA_PAGE_BITS, MemoryType::Sparse);
+            LogArenaCount(arenas.size());
             address_space[first_page] = new_arena;
             address_space[last_page] = new_arena;
         }
@@ -358,6 +371,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 total_size = first_size + last_size;
     const u64 end_block = (first_addr + total_size) >> block_shift;
     auto* new_arena = &arenas.emplace_back(instance, first_addr, total_size, MemoryType::Sparse);
+    LogArenaCount(arenas.size());
     auto* bind = BindsForArena(new_arena);
     resident_ranges.ForEachInRange(base_block, end_block, [&](const Backing& backing) {
         const u64 start = std::max(base_block, backing.start);
@@ -382,6 +396,13 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
 }
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+    // Debug switch: bind the whole arena instead of one page-range at a time. Used to test
+    // whether the per-frame single-page vkBindSparse calls are what kills the GPU.
+    static const bool bind_full_arena = std::getenv("SHADPS4_BIND_FULL_ARENA") != nullptr;
+    if (bind_full_arena) {
+        first_block = arena->cpu_addr >> block_shift;
+        last_block = first_block + (arena->size_bytes >> block_shift) - 1;
+    }
     u32 resident_blocks{};
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1, [&](u64 start, u64 end) {
@@ -402,6 +423,18 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         .memoryTypeIndex = arena_memory_type_index,
     };
     const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    {
+        // Diagnose sparse residency footprint growth (memory is only freed with the arena).
+        static std::atomic<u64> gt7_resident_bytes{0};
+        static std::atomic<u64> gt7_next_report{1ull << 30};
+        const u64 total = gt7_resident_bytes.fetch_add(alloc_info.allocationSize) +
+                          alloc_info.allocationSize;
+        const u64 next = gt7_next_report.load();
+        if (total >= next) {
+            LOG_WARNING(Render, "Sparse residency allocated {} MB total", total >> 20);
+            gt7_next_report.store(Common::AlignUpPow2(total + 1, 1ull << 30));
+        }
+    }
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
@@ -532,6 +565,19 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     if (pending_binds.empty()) {
         return;
     }
+    static const bool no_bind_sparse = std::getenv("SHADPS4_NO_BIND_SPARSE") != nullptr;
+    if (no_bind_sparse) {
+        // Debug switch: drop sparse bind submissions entirely (pages remain unbound). Used to
+        // test whether vkBindSparse itself is what hangs the GPU.
+        static std::atomic<u64> skipped_calls{0};
+        const u64 call = skipped_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (call % 64 == 1) {
+            LOG_WARNING(Render, "Skipping vkBindSparse calls={} pending_arenas={}", call,
+                        pending_binds.size());
+        }
+        pending_binds.clear();
+        return;
+    }
 
     std::vector<vk::SparseBufferMemoryBindInfo> buffer_binds;
     buffer_binds.reserve(pending_binds.size());
@@ -561,7 +607,18 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
+    GpuTrace::Record(GpuTrace::Op::BindSparse, buffer_binds.size());
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+    if (std::getenv("SHADPS4_BIND_SPARSE_IDLE") != nullptr) {
+        // Debug switch: fully serialize sparse binding with the graphics queue, testing whether
+        // an async bind/queue interaction is what hangs the GPU.
+        instance.GetGraphicsQueue().waitIdle();
+    }
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        GpuTrace::g_device_lost.store(true);
+        GpuTrace::Dump("bindSparse");
+        instance.ReportDeviceFault("bindSparse");
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     pending_binds.clear();
