@@ -1228,6 +1228,10 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
 
 Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
+    // SubmitDone() resets the copy offsets once every submission has finished, but a new submit
+    // can be copying at the same time; without the same lock the two race and an in-flight
+    // command stream can be overwritten, which the guest then executes as garbage.
+    std::scoped_lock submit_lock{submit_mutex};
     ASSERT_MSG(queue.dcb_buffer.capacity() >= queue.dcb_buffer_offset + dcb.size(),
                "dcb copy buffer out of reserved space");
     ASSERT_MSG(queue.ccb_buffer.capacity() >= queue.ccb_buffer_offset + ccb.size(),

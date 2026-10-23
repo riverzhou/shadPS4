@@ -4,6 +4,7 @@
 #include "core/libraries/kernel/wait_trace.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fmt/format.h>
 
@@ -235,6 +236,14 @@ int PS4_SYSV_ABI posix_pthread_cond_reltimedwait_np(PthreadCondT* cond, PthreadM
     return cvp->Wait(mutex, THR_RELTIME, usec);
 }
 
+// Debug switch: the deferred wake optimisation (a signal from the thread that owns the
+// waiters' user mutex is remembered and delivered on unlock) can hide a lost wakeup; forcing
+// immediate wakes makes the difference observable.
+static bool CondDeferDisabled() {
+    static const bool disabled = std::getenv("SHADPS4_COND_NO_DEFER") != nullptr;
+    return disabled;
+}
+
 int PthreadCond::Signal(Pthread* thread) {
     Pthread* curthread = g_curthread;
     if (thread) {
@@ -277,7 +286,8 @@ int PthreadCond::Signal(Pthread* thread) {
     has_user_waiters = SleepqRemove(sq, td);
 
     WakeSemaphore* wake_address = &td->wake_sema;
-    if (mp != nullptr && curthread != nullptr && mp->m_owner.load() == curthread) {
+    if (!CondDeferDisabled() && mp != nullptr && curthread != nullptr &&
+        mp->m_owner.load() == curthread) {
         if (curthread->nwaiter_defer >= Pthread::MaxDeferWaiters) {
             curthread->WakeAll();
         }
@@ -309,7 +319,8 @@ int PthreadCond::Broadcast() {
         Pthread* curthread = ba2->curthread;
         PthreadMutex* mp = td->mutex_obj;
 
-        if (mp != nullptr && curthread != nullptr && mp->m_owner.load() == curthread) {
+        if (!CondDeferDisabled() && mp != nullptr && curthread != nullptr &&
+            mp->m_owner.load() == curthread) {
             if (curthread->nwaiter_defer >= Pthread::MaxDeferWaiters) {
                 curthread->WakeAll();
             }
