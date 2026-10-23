@@ -432,7 +432,8 @@ set(SYSTEM_LIBS src/core/libraries/system/commondialog.cpp
                 src/core/libraries/sysmodule/sysmodule_internal.h
                 src/core/libraries/sysmodule/sysmodule_error.h
                 src/core/libraries/sysmodule/sysmodule_table.h
-                src/core/libraries/system/systemservice.cpp
+                src/core/libraries/system/deviceservice.cpp
+               src/core/libraries/system/systemservice.cpp
                 src/core/libraries/system/systemservice.h
                 src/core/libraries/system/systemservice_error.h
                 src/core/libraries/system/userservice.cpp

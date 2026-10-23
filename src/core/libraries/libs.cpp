@@ -69,6 +69,7 @@
 #include "core/libraries/sysmodule/sysmodule.h"
 #include "core/libraries/system/commondialog.h"
 #include "core/libraries/system/msgdialog.h"
+#include "core/libraries/system/deviceservice.h"
 #include "core/libraries/system/systemservice.h"
 #include "core/libraries/system/userservice.h"
 #include "core/libraries/ulobjmgr/ulobjmgr.h"
@@ -124,6 +125,7 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
             {"libSceVideoOut.sprx", Libraries::VideoOut::RegisterLib},
             {"libSceUserService.sprx", Libraries::UserService::RegisterLib},
             {"libSceSystemService.sprx", Libraries::SystemService::RegisterLib},
+            
             {"libScePad.sprx", Libraries::Pad::RegisterLib},
             {"libSceCommonDialog.sprx", Libraries::CommonDialog::RegisterLib},
             {"libSceMsgDialog.sprx", Libraries::MsgDialog::RegisterLib},
@@ -198,6 +200,11 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
             // nothing.
             // {"libSceSsl.sprx", Libraries::Ssl::RegisterLib},
         });
+
+        // The device-service exports live in libSceMbus, which is loaded as an LLE module, but
+        // that module does not export them; register the HLE implementation unconditionally so
+        // titles that poll it get a real answer instead of a zero-returning stub.
+        Libraries::DeviceService::RegisterLib(sym);
 
         for (auto mod : ModulesToLoad) {
             if (mod.module_name == "libSceGnmDriver.sprx") {
