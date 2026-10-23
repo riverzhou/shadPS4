@@ -748,7 +748,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // the post process pass still sRGB encoded and has to be decoded there instead.
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
-    pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    // Debug switch: skip the host post-process pass that samples the guest framebuffer and
+    // writes the presented frame, to test whether that pass is what loses the device.
+    static const bool no_post_process = std::getenv("SHADPS4_NO_POST_PROCESS") != nullptr;
+    if (!no_post_process) {
+        pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    }
 
     DebugState.game_resolution = {image_size.width, image_size.height};
     DebugState.output_resolution = {frame->width, frame->height};

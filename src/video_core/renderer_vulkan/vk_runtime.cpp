@@ -79,18 +79,21 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
     return std::make_pair(src_layers, dst_layers);
 }
 
-static u32 BufferImageCopySize(const vk::BufferImageCopy& copy, const vk::Format pixel_format) {
-    const u32 row_length = copy.bufferRowLength ? copy.bufferRowLength : copy.imageExtent.width;
-    const u32 height = copy.bufferImageHeight ? copy.bufferImageHeight : copy.imageExtent.height;
+static u64 BufferImageCopySize(const vk::BufferImageCopy& copy, vk::Format pixel_format) {
+    const u64 row_length = copy.bufferRowLength ? copy.bufferRowLength : copy.imageExtent.width;
+    const u64 height = copy.bufferImageHeight ? copy.bufferImageHeight : copy.imageExtent.height;
 
     const auto block = vk::blockExtent(pixel_format);
-    const u32 block_size = vk::blockSize(pixel_format);
-    const u32 row_pitch = (row_length / block[0]) * block_size;
-    const u32 slice_pitch = (height / block[1]) * row_pitch;
+    const u64 block_size = vk::blockSize(pixel_format);
+    const u64 row_pitch = (row_length / block[0]) * block_size;
+    const u64 slice_pitch = (height / block[1]) * row_pitch;
 
-    const u32 width_in_blocks = (copy.imageExtent.width + block[0] - 1) / block[0];
-    const u32 height_in_blocks = (copy.imageExtent.height + block[1] - 1) / block[1];
-    const u32 num_slices = copy.imageExtent.depth * copy.imageSubresource.layerCount;
+    const u64 width_in_blocks = (u64{copy.imageExtent.width} + block[0] - 1) / block[0];
+    const u64 height_in_blocks = (u64{copy.imageExtent.height} + block[1] - 1) / block[1];
+    const u64 num_slices = u64{copy.imageExtent.depth} * copy.imageSubresource.layerCount;
+    if (num_slices == 0) {
+        return 0;
+    }
 
     return (num_slices - 1) * slice_pitch + (height_in_blocks - 1) * row_pitch +
            width_in_blocks * block_size;
@@ -185,10 +188,36 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
     SetBackingSamples(dst, dst->info.num_samples, false);
     scheduler.EndRendering();
 
+    // A guest descriptor can transiently contain garbage (GT7 does this while it rebuilds render
+    // state), which produces copy regions far larger than the staging buffer they read from.
+    // Asking the GPU to read that far out of bounds faults the context, so drop such regions.
+    std::vector<vk::BufferImageCopy> copies;
+    copies.reserve(upload_copies.size());
+    for (const auto& copy : upload_copies) {
+        if (u64{copy.bufferOffset} + BufferImageCopySize(copy, dst->info.pixel_format) >
+            src->SizeBytes()) {
+            static std::atomic<u32> dropped{0};
+            if (dropped.fetch_add(1, std::memory_order_relaxed) < 16) {
+                LOG_WARNING(Render_Vulkan,
+                            "Dropping image upload region outside the source buffer: offset={} "
+                            "extent={}x{}x{} layers={} buffer_size={}",
+                            copy.bufferOffset, copy.imageExtent.width, copy.imageExtent.height,
+                            copy.imageExtent.depth, copy.imageSubresource.layerCount,
+                            src->SizeBytes());
+            }
+            continue;
+        }
+        copies.push_back(copy);
+    }
+    if (copies.empty()) {
+        dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
+        return;
+    }
+
     bool needs_flush =
         Transit(dst, vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferWrite);
-    for (const auto& copy : upload_copies) {
+    for (const auto& copy : copies) {
         const auto copy_size = BufferImageCopySize(copy, dst->info.pixel_format);
         needs_flush |= IsBufferAccessed(src, copy.bufferOffset, copy_size);
     }
@@ -198,9 +227,9 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.copyBufferToImage(src->Handle(), dst->GetImage(), vk::ImageLayout::eTransferDstOptimal,
-                             upload_copies);
+                             copies);
 
-    for (const auto& copy : upload_copies) {
+    for (const auto& copy : copies) {
         const auto copy_size = BufferImageCopySize(copy, dst->info.pixel_format);
         AccessBuffer(src, copy.bufferOffset, copy_size, vk::PipelineStageFlagBits2::eCopy,
                      vk::AccessFlagBits2::eTransferRead);
