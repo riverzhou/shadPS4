@@ -157,7 +157,13 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     }
 
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
-    ASSERT(is_new);
+    if (!is_new) {
+        // The archive keeps every entry it was ever given, so a cache that was written more than
+        // once can contain the same pipeline key twice.
+        LOG_WARNING(Render, "Duplicate cached compute pipeline {:#x}, skipping",
+                    compute_key.value);
+        return false;
+    }
 
     it.value() =
         std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile, *pipeline_cache,
@@ -234,7 +240,13 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     }
 
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
-    ASSERT(is_new);
+    if (!is_new) {
+        LOG_WARNING(Render,
+                    "Duplicate cached graphics pipeline (vs={:#x} fs={:#x}), skipping",
+                    graphics_key.stage_hashes[u32(Shader::SwStage::Vertex)],
+                    graphics_key.stage_hashes[u32(Shader::SwStage::Fragment)]);
+        return false;
+    }
 
     it.value() = std::make_unique<GraphicsPipeline>(
         instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
