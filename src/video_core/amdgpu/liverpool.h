@@ -73,8 +73,13 @@ public:
 
     void SubmitDone() noexcept {
         std::scoped_lock lk{submit_mutex};
-        mapped_queues[GfxQueueId].ccb_buffer_offset = 0;
-        mapped_queues[GfxQueueId].dcb_buffer_offset = 0;
+        // Only recycle the command-buffer copies when nothing is parsing them; an in-flight
+        // submission keeps a span into this buffer, and rewinding it would overwrite a stream the
+        // GPU thread has not finished with.
+        if (num_submits == 0) {
+            mapped_queues[GfxQueueId].ccb_buffer_offset = 0;
+            mapped_queues[GfxQueueId].dcb_buffer_offset = 0;
+        }
         submit_done = true;
         submit_cv.notify_one();
     }

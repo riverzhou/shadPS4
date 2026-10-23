@@ -1228,10 +1228,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
 
 Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
-    // SubmitDone() resets the copy offsets once every submission has finished, but a new submit
-    // can be copying at the same time; without the same lock the two race and an in-flight
-    // command stream can be overwritten, which the guest then executes as garbage.
-    std::scoped_lock submit_lock{submit_mutex};
+    // Caller (SubmitGfx) holds submit_mutex, which serializes this with SubmitDone resets.
     ASSERT_MSG(queue.dcb_buffer.capacity() >= queue.dcb_buffer_offset + dcb.size(),
                "dcb copy buffer out of reserved space");
     ASSERT_MSG(queue.ccb_buffer.capacity() >= queue.ccb_buffer_offset + ccb.size(),
@@ -1266,19 +1263,22 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
+    // The copied command buffers are shared by every in-flight submission, so account the
+    // submission before anything (SubmitDone) can reset the copy offsets, and keep the copy and
+    // the accounting under the same lock.
+    std::scoped_lock submit_lock{submit_mutex};
     if (EmulatorSettings.IsCopyGpuBuffers()) {
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
     }
-
+    ++num_submits;
     auto task = ProcessGraphics(dcb);
     {
-        std::scoped_lock lock{submit_mutex, queue.m_access};
+        std::scoped_lock lock{queue.m_access};
         if (!ccb.empty()) {
             ce_submits.emplace(ProcessCeUpdate(ccb).handle);
             ++num_submits;
         }
         queue.submits.emplace(task.handle);
-        ++num_submits;
         submit_cv.notify_one();
     }
 }
