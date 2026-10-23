@@ -3,7 +3,10 @@
 
 #include "core/libraries/kernel/guest_stack_dump.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <map>
 #include <cstdlib>
 #include <mutex>
 #include <string>
@@ -77,6 +80,119 @@ void DumpGuestThreadStacks() {
 #else
     LOG_INFO(Kernel, "guest stack dump is only implemented on Windows");
 #endif
+}
+
+void StartThreadRipSampler() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* name = std::getenv("SHADPS4_SAMPLE_RIP_THREAD");
+        if (name == nullptr) {
+            return;
+        }
+        const std::string target{name};
+        std::thread{[target] {
+            // Let the title finish loading before touching its threads; suspending a guest
+            // thread while the emulator is still wiring up libraries is not safe.
+            std::this_thread::sleep_for(std::chrono::seconds(45));
+            std::map<u64, u32> histogram;
+            std::map<u64, u32> guest_words;
+            std::map<u64, u32> host_words;
+#ifdef _WIN32
+            const auto module = reinterpret_cast<u64>(GetModuleHandleW(nullptr));
+            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                module + static_cast<u64>(dos->e_lfanew));
+            const u64 host_base = module;
+            const u64 host_size = nt->OptionalHeader.SizeOfImage;
+#else
+            const u64 host_base = 0;
+            const u64 host_size = 0;
+#endif
+            const auto start = std::chrono::steady_clock::now();
+            auto last_report = start;
+            while (true) {
+                auto* thread_state = ThrState::Instance();
+                Pthread* found = nullptr;
+                {
+                    std::scoped_lock lk{thread_state->thread_list_lock};
+                    for (Pthread* thread : thread_state->threads) {
+                        if (thread != nullptr && thread->name == target) {
+                            found = thread;
+                            break;
+                        }
+                    }
+                }
+                if (found != nullptr && found->native_thr) {
+                    const auto handle =
+                        reinterpret_cast<HANDLE>(found->native_thr->GetHandle());
+                    if (handle != nullptr && handle != GetCurrentThread() &&
+                        SuspendThread(handle) != static_cast<DWORD>(-1)) {
+                        CONTEXT ctx{};
+                        ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                        if (GetThreadContext(handle, &ctx)) {
+                            ++histogram[ctx.Rip];
+                            // While the thread is parked in a system wait its stack still holds
+                            // the return addresses, including the guest call site of the HLE
+                            // function that is blocked. Only keep words that look like module
+                            // addresses (low 32-bit address space, above the usual 16 MB).
+                            const auto* stack = reinterpret_cast<const u64*>(ctx.Rsp);
+                            for (int i = 0; i < 48; ++i) {
+                                u64 value = 0;
+                                __try {
+                                    value = stack[i];
+                                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                                    break;
+                                }
+                                if (value >= 0x400000 && value < 0x100000000ull) {
+                                    ++guest_words[value];
+                                }
+                                // Words inside the emulator image are the host call frames of
+                                // the blocked HLE function; symbolizing them names the wait.
+                                if (value >= host_base && value < host_base + host_size) {
+                                    ++host_words[value];
+                                }
+                            }
+                        }
+                        ResumeThread(handle);
+                    }
+                }
+                const auto now = std::chrono::steady_clock::now();
+                if (now - last_report >= std::chrono::seconds(5)) {
+                    last_report = now;
+                    std::vector<std::pair<u32, u64>> top;
+                    for (const auto& [rip, count] : histogram) {
+                        top.emplace_back(count, rip);
+                    }
+                    std::ranges::sort(top, std::greater<>{});
+                    LOG_INFO(Kernel, "rip histogram for '{}' ({} samples)", target, histogram.size());
+                    for (std::size_t i = 0; i < std::min<std::size_t>(top.size(), 4); ++i) {
+                        LOG_INFO(Kernel, "  {:#x} x{}", top[i].second, top[i].first);
+                    }
+                    std::vector<std::pair<u32, u64>> guest_top;
+                    for (const auto& [addr, count] : guest_words) {
+                        guest_top.emplace_back(count, addr);
+                    }
+                    std::ranges::sort(guest_top, std::greater<>{});
+                    LOG_INFO(Kernel, "stack words in the guest range:");
+                    for (std::size_t i = 0;
+                         i < std::min<std::size_t>(guest_top.size(), 8); ++i) {
+                        LOG_INFO(Kernel, "  {:#x} x{}", guest_top[i].second, guest_top[i].first);
+                    }
+                    std::vector<std::pair<u32, u64>> host_top;
+                    for (const auto& [addr, count] : host_words) {
+                        host_top.emplace_back(count, addr - host_base);
+                    }
+                    std::ranges::sort(host_top, std::greater<>{});
+                    LOG_INFO(Kernel, "stack words in the emulator image (module offsets):");
+                    for (std::size_t i = 0; i < std::min<std::size_t>(host_top.size(), 12); ++i) {
+                        LOG_INFO(Kernel, "  +{:#x} x{}", host_top[i].second, host_top[i].first);
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }}.detach();
+        LOG_INFO(Kernel, "rip sampler started for thread '{}'", target);
+    });
 }
 
 void StartGuestStackDumpTimer() {
