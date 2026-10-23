@@ -37,9 +37,18 @@ void RecordGuestWait(const char* name, u64 guest_ra) {
     if (!g_enabled) {
         return;
     }
+    // A title can spin on one wait millions of times per second; only record when the call site
+    // changes or after a pause, which keeps the ring meaningful and the mutex cool.
+    static thread_local u64 last_ra = ~u64{0};
+    static thread_local u64 last_ms = 0;
     const auto now = static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
                                           .count());
+    if (guest_ra == last_ra && now - last_ms < 100) {
+        return;
+    }
+    last_ra = guest_ra;
+    last_ms = now;
     std::scoped_lock lk{g_ring_mutex};
     g_ring[g_ring_pos] = WaitEntry{name, guest_ra, ++g_tid_hint, now};
     g_ring_pos = (g_ring_pos + 1) % RingSize;
@@ -49,8 +58,16 @@ void DumpGuestWaitRing() {
     if (!g_enabled) {
         return;
     }
-    std::scoped_lock lk{g_ring_mutex};
-    LOG_INFO(Kernel, "guest wait ring (oldest first, base of the module is in the boot log)");
+    static std::atomic<u32> dump_index{0};
+    const u32 index = dump_index.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock lk{g_ring_mutex, std::defer_lock};
+    if (!lk.try_lock()) {
+        LOG_INFO(Kernel, "guest wait ring #{} skipped (ring busy)", index);
+        return;
+    }
+    // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
+    LOG_INFO(Kernel, "guest wait ring #{} (oldest first, base of the module is in the boot log)",
+             index);
     for (std::size_t i = 0; i < RingSize; ++i) {
         const auto& e = g_ring[(g_ring_pos + i) % RingSize];
         if (e.name == nullptr) {
