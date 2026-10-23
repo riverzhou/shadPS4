@@ -185,6 +185,12 @@ void ImageInfo::UpdateSize() noexcept {
     // An unknown data format has no bits per block; the tiling helpers divide by that value, so
     // treat such an image as zero sized instead of crashing (titles transiently build descriptors
     // with uninitialised format fields while they rebuild render state).
+    if (num_samples == 0 || num_samples > 8 || !std::has_single_bit(num_samples)) {
+        // Transient garbage in the sample count would break the macro tiling tables; a single
+        // sample is the only safe interpretation.
+        LOG_WARNING(Render_Vulkan, "Image with invalid sample count {}, using 1", num_samples);
+        num_samples = 1;
+    }
     if (num_bits == 0) {
         LOG_WARNING(Render_Vulkan, "Image with unknown data format, ignoring its size");
         guest_size = 0;
