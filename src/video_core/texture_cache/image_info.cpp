@@ -182,6 +182,17 @@ bool ImageInfo::IsCompatible(const ImageInfo& info) const {
 }
 
 void ImageInfo::UpdateSize() noexcept {
+    // An unknown data format has no bits per block; the tiling helpers divide by that value, so
+    // treat such an image as zero sized instead of crashing (titles transiently build descriptors
+    // with uninitialised format fields while they rebuild render state).
+    if (num_bits == 0) {
+        LOG_WARNING(Render_Vulkan, "Image with unknown data format, ignoring its size");
+        guest_size = 0;
+        micro_tiled_mips = 0;
+        mips_layout = {};
+        return;
+    }
+
     if (std::has_single_bit(pitch) && std::bit_width(pitch) <= MAX_DIM_LOG2 &&
         pitch == size.height && size.depth == 1 && resources.levels == std::bit_width(pitch) &&
         resources.layers == 1 && num_samples == 1 && props.is_block && props.is_pow2 && !alt_tile &&
