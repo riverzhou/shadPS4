@@ -195,6 +195,8 @@ public:
         return dynamic_info.import_libs;
     }
 
+    void DumpLoadedImage() const;
+
     std::span<const LibraryInfo> GetExportLibs() const {
         return dynamic_info.export_libs;
     }

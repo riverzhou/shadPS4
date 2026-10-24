@@ -94,7 +94,43 @@ Module::Module(Core::MemoryManager* memory_, const std::filesystem::path& file_,
         LoadModuleToMemory(max_tls_index);
         LoadDynamicInfo();
         LoadSymbols();
+        DumpLoadedImage();
     }
+}
+
+void Module::DumpLoadedImage() const {
+    // SHADPS4_DUMP_MODULE_DIR writes every loaded module as a flat image: byte offset N is the
+    // code at guest address base + N. The eboot and the game-provided modules are encrypted
+    // SELFs, so this dump is the only way to disassemble a guest return address outside IDA.
+    static const char* out_dir = std::getenv("SHADPS4_DUMP_MODULE_DIR");
+    if (out_dir == nullptr || base_virtual_addr == 0) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+    if (ec) {
+        return;
+    }
+    const auto path = std::filesystem::path{out_dir} / (name + ".img");
+    Common::FS::IOFile out{path, Common::FS::FileAccessMode::Create, Common::FS::FileType::BinaryFile};
+    if (!out.IsOpen()) {
+        return;
+    }
+    u64 written = 0;
+    for (const auto& phdr : elf.GetProgramHeader()) {
+        if (phdr.p_type != 1 /* PT_LOAD */ || phdr.p_filesz == 0) {
+            continue;
+        }
+        if (written < phdr.p_vaddr) {
+            std::vector<u8> pad(phdr.p_vaddr - written, 0);
+            out.Write(pad);
+            written = phdr.p_vaddr;
+        }
+        const auto* src = reinterpret_cast<const u8*>(base_virtual_addr + phdr.p_vaddr);
+        out.WriteRaw<u8>(src, phdr.p_filesz);
+        written += phdr.p_filesz;
+    }
+    LOG_INFO(Loader, "Dumped {} ({} bytes) to {}", name, written, path.string());
 }
 
 Module::~Module() = default;
