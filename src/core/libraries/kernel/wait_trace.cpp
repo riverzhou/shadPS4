@@ -297,8 +297,17 @@ void DumpGuestWaitRing() {
             const u32 shown = std::min<u32>(hist.count, HistorySize);
             for (u32 i = 0; i < shown; ++i) {
                 const auto& h = hist.entries[(hist.count - shown + i) % HistorySize];
-                report += std::string("      recent: ") + h.name + " ra=" +
-                          std::to_string(h.guest_ra) + " at=" + std::to_string(h.ms) + nl;
+                std::string hist_where = "?";
+                if (auto* module = linker->FindByAddress(h.guest_ra); module != nullptr) {
+                    char buf[128];
+                    std::snprintf(buf, sizeof(buf), "%s+0x%llx",
+                                  module->GetModuleInfo().name.data(),
+                                  static_cast<unsigned long long>(h.guest_ra -
+                                                                  module->GetBaseAddress()));
+                    hist_where = buf;
+                }
+                report += std::string("      recent: ") + h.name + " (" + hist_where + ") at=" +
+                          std::to_string(h.ms) + nl;
             }
         }
     }
