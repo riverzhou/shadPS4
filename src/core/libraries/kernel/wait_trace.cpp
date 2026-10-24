@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -85,11 +86,13 @@ struct SemaEvent {
     u32 handle;
     s32 count;
     u64 ms;
+    char thread[20]{};
 };
 constexpr std::size_t SemaRingSize = 4096;
 constexpr std::size_t MaxSemaHandles = 64;
 std::array<std::atomic<u32>, MaxSemaHandles> g_sema_waits{};
 std::array<std::atomic<u32>, MaxSemaHandles> g_sema_signals{};
+std::map<u32, std::deque<SemaEvent>> g_sema_recent;
 std::array<SemaEvent, SemaRingSize> g_sema_ring{};
 std::atomic<u64> g_sema_index{0};
 std::mutex g_sema_mutex;
@@ -213,7 +216,16 @@ void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
     }
     std::scoped_lock lk{g_sema_mutex};
     const u64 slot = g_sema_index.fetch_add(1, std::memory_order_relaxed);
-    g_sema_ring[slot % SemaRingSize] = SemaEvent{kind, handle, count, tick};
+    SemaEvent event{kind, handle, count, tick};
+    if (const auto* current = g_curthread; current != nullptr) {
+        std::snprintf(event.thread, sizeof(event.thread), "%s", current->name.c_str());
+    }
+    g_sema_ring[slot % SemaRingSize] = event;
+    auto& recent = g_sema_recent[handle];
+    recent.push_back(event);
+    if (recent.size() > 8) {
+        recent.pop_front();
+    }
 }
 
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
@@ -289,14 +301,29 @@ void DumpGuestWaitRing() {
 
     {
         std::scoped_lock sema_lock{g_sema_mutex};
+        for (const auto& [handle, events] : g_sema_recent) {
+            if (events.empty()) {
+                continue;
+            }
+            LOG_INFO(Kernel, "  sema {} recent events:", handle);
+            report += std::string("  sema ") + std::to_string(handle) + " recent events:" + nl;
+            for (const auto& ev : events) {
+                LOG_INFO(Kernel, "    {} count={} by '{}'", ev.kind, ev.count, ev.thread);
+                report += std::string("    ") + ev.kind + " count=" + std::to_string(ev.count) +
+                          " by '" + ev.thread + "'" + nl;
+            }
+        }
+    }
+    {
+        std::scoped_lock sema_lock{g_sema_mutex};
         const u64 total = g_sema_index.load(std::memory_order_relaxed);
         const u64 count = total < SemaRingSize ? total : SemaRingSize;
         LOG_INFO(Kernel, "  last {} semaphore events (oldest first):", count);
         u64 first = count > 200 ? count - 200 : 0;
         for (u64 i = 0; i < count; ++i) {
             const auto& ev = g_sema_ring[(total - count + i) % SemaRingSize];
-            LOG_INFO(Kernel, "    {} handle={} count={} at={} ms", ev.kind, ev.handle, ev.count,
-                     ev.ms);
+            LOG_INFO(Kernel, "    {} handle={} count={} by '{}' at={} ms", ev.kind, ev.handle,
+                     ev.count, ev.thread, ev.ms);
             if (i < first) {
                 continue;
             }
