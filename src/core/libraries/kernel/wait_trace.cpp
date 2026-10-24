@@ -49,7 +49,7 @@ struct SemaEvent {
     s32 count;
     u64 ms;
 };
-constexpr std::size_t SemaRingSize = 128;
+constexpr std::size_t SemaRingSize = 4096;
 std::array<SemaEvent, SemaRingSize> g_sema_ring{};
 std::atomic<u64> g_sema_index{0};
 std::mutex g_sema_mutex;
