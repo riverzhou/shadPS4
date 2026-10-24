@@ -523,7 +523,7 @@ static void ApplyExternalPress(OrbisPadData* pData, int processed) {
     }
     static const u64 hold_ms = [] {
         const char* env = std::getenv("SHADPS4_AUTO_PRESS_HOLD_MS");
-        return env != nullptr ? std::strtoull(env, nullptr, 10) : 1200ull;
+        return env != nullptr ? std::strtoull(env, nullptr, 10) : 2500ull;
     }();
     held_until = now + hold_ms;
     LOG_INFO(Lib_Pad, "external press '{}' for {} ms", name, hold_ms);
