@@ -384,6 +384,7 @@ int PthreadCond::Broadcast() {
 
 int PS4_SYSV_ABI posix_pthread_cond_signal(PthreadCondT* cond) {
     RecordCondSignal(reinterpret_cast<u64>(cond), false);
+    TraceCondSignal(reinterpret_cast<u64>(cond), "signal");
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     return cvp->Signal(nullptr);
@@ -397,6 +398,7 @@ int PS4_SYSV_ABI posix_pthread_cond_signalto_np(PthreadCondT* cond, Pthread* thr
 
 int PS4_SYSV_ABI posix_pthread_cond_broadcast(PthreadCondT* cond) {
     RecordCondSignal(reinterpret_cast<u64>(cond), true);
+    TraceCondSignal(reinterpret_cast<u64>(cond), "broadcast");
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     cvp->Broadcast();

@@ -28,6 +28,10 @@ void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_cou
 void RecordCondWait(u64 cond, u64 mutex);
 void RecordCondWaitDone(u64 cond);
 void RecordCondSignal(u64 cond, bool broadcast);
+
+/// Report who signalled a condvar, once per (cond, thread) pair. A wait that never gets its signal
+/// is the freeze signature; this shows which call sites do signal and which one is missing.
+void TraceCondSignal(u64 cond, const char* what);
 void RecordSemaOverflow(u32 handle);
 
 /// Track which mutexes a guest thread currently holds. A thread that parks on a semaphore while

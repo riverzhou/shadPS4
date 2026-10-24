@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <set>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -239,6 +240,26 @@ void RecordCondWaitDone(u64 cond) {
     if (it != g_cond_info.end() && it->second.waiters > 0) {
         it->second.waiters--;
     }
+}
+
+void TraceCondSignal(u64 cond, const char* what) {
+    static const bool on = std::getenv("SHADPS4_TRACE_COND_SIGNAL") != nullptr;
+    if (!on) {
+        return;
+    }
+    // one line per (cond, thread): a busy condvar would otherwise flood the log
+    static std::mutex seen_lock;
+    static std::set<std::pair<u64, std::string>> seen;
+    const auto* current = g_curthread;
+    const std::string thread = current != nullptr ? current->name : "?";
+    {
+        std::scoped_lock lk{seen_lock};
+        if (!seen.emplace(cond, thread).second) {
+            return;
+        }
+    }
+    LOG_INFO(Kernel, "cond signal {:#x} ({}) by '{}' tid={}", cond, what, thread,
+             current != nullptr ? current->tid.load() : 0);
 }
 
 void RecordCondSignal(u64 cond, bool broadcast) {
