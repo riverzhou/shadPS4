@@ -413,6 +413,20 @@ void DumpGuestWaitRing() {
                 report += "  condvars with waiters:" + nl;
                 announced = true;
             }
+            // Dump the wait object itself: the words around the condvar usually hold a vtable-like
+            // pointer and flags that identify the subsystem owning it.
+            if (info.mutex != 0) {
+                char hex[3 * 64 + 1]{};
+                const auto* bytes = reinterpret_cast<const u8*>(info.mutex);
+                std::size_t written = 0;
+                for (std::size_t i = 0; i < 64 && written + 3 < sizeof(hex); ++i) {
+                    std::snprintf(hex + written, sizeof(hex) - written, "%02x ", bytes[i]);
+                    written += 3;
+                }
+                LOG_INFO(Kernel, "      object bytes at {:#x}: {}", info.mutex, hex);
+                report += std::string("      object bytes at ") + std::to_string(info.mutex) +
+                          ": " + hex + nl;
+            }
             const u64 since_signal =
                 info.last_signal_ms == 0 ? ~u64{0} : now - info.last_signal_ms;
             LOG_INFO(Kernel,
