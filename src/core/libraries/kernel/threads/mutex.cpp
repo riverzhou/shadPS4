@@ -291,7 +291,8 @@ s32 PS4_SYSV_ABI posix_pthread_mutex_trylock(PthreadMutexT* mutex) {
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX
-    RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)));
+    RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)),
+                     reinterpret_cast<u64>(mutex));
     return (*mutex)->Lock(nullptr);
 }
 

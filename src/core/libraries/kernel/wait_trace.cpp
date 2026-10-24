@@ -28,6 +28,7 @@ constexpr std::size_t RingSize = 32;
 struct WaitEntry {
     const char* name;
     u64 guest_ra;
+    u64 obj;
     u32 tid;
     u64 ms;
     char thread[20]{};
@@ -41,7 +42,7 @@ bool g_enabled = std::getenv("SHADPS4_DUMP_WAITS_AT") != nullptr;
 std::atomic<u32> g_tid_hint{0};
 } // namespace
 
-void RecordGuestWait(const char* name, u64 guest_ra) {
+void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
     if (!g_enabled) {
         return;
     }
@@ -57,7 +58,7 @@ void RecordGuestWait(const char* name, u64 guest_ra) {
     }
     last_ra = guest_ra;
     last_ms = now;
-    WaitEntry entry{name, guest_ra, ++g_tid_hint, now};
+    WaitEntry entry{name, guest_ra, obj, ++g_tid_hint, now};
     const auto* current = g_curthread;
     if (current != nullptr) {
         entry.tid = static_cast<u32>(current->tid.load());
@@ -94,8 +95,8 @@ void DumpGuestWaitRing() {
                           static_cast<unsigned long long>(e.guest_ra - module->GetBaseAddress()));
             where = buf;
         }
-        LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} ({} ) at={} ms", e.thread, e.tid,
-                 e.name, e.guest_ra, where, e.ms);
+        LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} ({}) obj={:#x} at={} ms",
+                 e.thread, e.tid, e.name, e.guest_ra, where, e.obj, e.ms);
     }
 }
 
