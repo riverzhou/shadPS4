@@ -327,8 +327,19 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
     return ORBIS_OK;
 }
 
+// SHADPS4_TRACE_SEMA=1 logs the first few hundred wait/signal pairs. A frozen title then shows
+// whether the semaphore a thread blocks on was ever signalled afterwards.
+static bool TraceSema() {
+    static const bool on = std::getenv("SHADPS4_TRACE_SEMA") != nullptr;
+    return on;
+}
+
 s32 PS4_SYSV_ABI sceKernelWaitSema(OrbisKernelSema sem, s32 needCount, u32* pTimeout) {
-    RecordGuestWait("sceKernelWaitSema", reinterpret_cast<u64>(__builtin_return_address(0)));
+    RecordGuestWait("sceKernelWaitSema", reinterpret_cast<u64>(__builtin_return_address(0)),
+                    static_cast<u64>(sem.index));
+    if (TraceSema()) {
+        RecordSemaEvent("wait", sem.index, needCount);
+    }
     if (!orbis_sems.IsAllocated(sem)) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
@@ -336,6 +347,9 @@ s32 PS4_SYSV_ABI sceKernelWaitSema(OrbisKernelSema sem, s32 needCount, u32* pTim
 }
 
 s32 PS4_SYSV_ABI sceKernelSignalSema(OrbisKernelSema sem, s32 signalCount) {
+    if (TraceSema()) {
+        RecordSemaEvent("signal", sem.index, signalCount);
+    }
     if (!orbis_sems.IsAllocated(sem)) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }

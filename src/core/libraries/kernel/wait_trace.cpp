@@ -42,6 +42,29 @@ bool g_enabled = std::getenv("SHADPS4_DUMP_WAITS_AT") != nullptr;
 std::atomic<u32> g_tid_hint{0};
 } // namespace
 
+namespace {
+struct SemaEvent {
+    const char* kind;
+    u32 handle;
+    s32 count;
+    u64 ms;
+};
+constexpr std::size_t SemaRingSize = 128;
+std::array<SemaEvent, SemaRingSize> g_sema_ring{};
+std::atomic<u64> g_sema_index{0};
+std::mutex g_sema_mutex;
+} // namespace
+
+void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
+    const u64 tick = static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    std::scoped_lock lk{g_sema_mutex};
+    const u64 slot = g_sema_index.fetch_add(1, std::memory_order_relaxed);
+    g_sema_ring[slot % SemaRingSize] = SemaEvent{kind, handle, count, tick};
+}
+
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
     if (!g_enabled) {
         return;
@@ -84,6 +107,17 @@ void DumpGuestWaitRing() {
     }
     // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
+    {
+        std::scoped_lock lk{g_sema_mutex};
+        const u64 total = g_sema_index.load(std::memory_order_relaxed);
+        const u64 count = total < SemaRingSize ? total : SemaRingSize;
+        LOG_INFO(Kernel, "  last {} semaphore events (oldest first):", count);
+        for (u64 i = 0; i < count; ++i) {
+            const auto& ev = g_sema_ring[(total - count + i) % SemaRingSize];
+            LOG_INFO(Kernel, "    {} handle={} count={} at={} ms", ev.kind, ev.handle, ev.count,
+                     ev.ms);
+        }
+    }
     auto* linker = Common::Singleton<Core::Linker>::Instance();
     for (const auto& [tid, e] : g_last_wait) {
         // Resolve the guest return address to its module so the dump points at a file that can be

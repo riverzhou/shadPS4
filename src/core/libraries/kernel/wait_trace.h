@@ -14,6 +14,10 @@ namespace Libraries::Kernel {
 // can tell two different objects that share the same guest call site apart.
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 
+/// Keep the most recent semaphore wait/signal events so a wait dump can show whether the
+/// semaphore a frozen thread blocks on was ever signalled afterwards.
+void RecordSemaEvent(const char* kind, u32 handle, s32 count);
+
 /// Schedule dumps of the wait ring at the comma separated seconds in SHADPS4_DUMP_WAITS_AT.
 void StartWaitRingDumpTimer();
 
