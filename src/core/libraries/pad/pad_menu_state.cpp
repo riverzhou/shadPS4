@@ -45,6 +45,7 @@ constexpr auto POLL_INTERVAL = std::chrono::milliseconds(100);
 std::atomic<bool> g_started{false};
 std::atomic<bool> g_settings_visible{false};
 std::atomic<bool> g_movie_visible{false};
+std::atomic<int> g_settings_pages{0};
 
 std::filesystem::path FindUiLog() {
     std::error_code ec;
@@ -99,15 +100,14 @@ void ApplyChunk(std::string& window, std::string_view chunk) {
     const auto end = std::max(end_unload == std::string::npos ? 0 : end_unload,
                               end_splash == std::string::npos ? 0 : end_splash);
     bool visible = end == 0 || start > end;
-    if (visible) {
-        std::size_t pages = 0;
-        for (auto at = window.find(MARKER_SETTINGS_PAGE); at != std::string::npos;
-             at = window.find(MARKER_SETTINGS_PAGE, at + 1)) {
-            ++pages;
-        }
-        if (pages >= 2) {
-            visible = false;
-        }
+    std::size_t pages = 0;
+    for (auto at = window.find(MARKER_SETTINGS_PAGE); at != std::string::npos;
+         at = window.find(MARKER_SETTINGS_PAGE, at + 1)) {
+        ++pages;
+    }
+    g_settings_pages.store(static_cast<int>(pages), std::memory_order_relaxed);
+    if (visible && pages >= 2) {
+        visible = false;
     }
     g_settings_visible.store(visible, std::memory_order_relaxed);
 }
@@ -159,6 +159,10 @@ void WatchLoop() {
 }
 
 } // namespace
+
+int SettingsPagesFinalized() {
+    return g_settings_pages.load(std::memory_order_relaxed);
+}
 
 MenuScreen GetMenuScreen() {
     if (!g_started.exchange(true)) {

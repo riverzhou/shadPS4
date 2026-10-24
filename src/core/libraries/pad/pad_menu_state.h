@@ -20,4 +20,8 @@ enum class MenuScreen {
 // and is a no-op when the title does not write a UI log.
 MenuScreen GetMenuScreen();
 
+/// Number of display-settings pages that have logged a finalize line. The wizard is over at three;
+/// automated input uses this to stop pressing instead of walking the menus behind it.
+int SettingsPagesFinalized();
+
 } // namespace Libraries::Pad
