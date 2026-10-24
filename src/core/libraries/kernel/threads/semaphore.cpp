@@ -330,7 +330,8 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
 // SHADPS4_TRACE_SEMA=1 logs the first few hundred wait/signal pairs. A frozen title then shows
 // whether the semaphore a thread blocks on was ever signalled afterwards.
 static bool TraceSema() {
-    static const bool on = std::getenv("SHADPS4_TRACE_SEMA") != nullptr;
+    static const bool on = std::getenv("SHADPS4_TRACE_SEMA") != nullptr ||
+                            std::getenv("SHADPS4_FREEZE_DUMP") != nullptr;
     return on;
 }
 

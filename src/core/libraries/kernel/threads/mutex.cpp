@@ -239,7 +239,11 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
     // deadlocked title can be traced to the thread that never released it.
     static const u64 contention_ms = [] {
         const char* env = std::getenv("SHADPS4_TRACE_MUTEX_CONTENTION_MS");
-        return env != nullptr ? std::strtoull(env, nullptr, 10) : 0ull;
+        if (env != nullptr) {
+            return std::strtoull(env, nullptr, 10);
+        }
+        // The unified freeze switch also enables the contention tracer with a sane threshold.
+        return std::getenv("SHADPS4_FREEZE_DUMP") != nullptr ? 300ull : 0ull;
     }();
     if (contention_ms != 0 && abstime == nullptr) {
         while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {

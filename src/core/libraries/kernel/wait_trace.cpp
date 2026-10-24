@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <string>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "common/logging/log.h"
+#include "common/path_util.h"
 #include "common/singleton.h"
 #include "core/libraries/kernel/guest_stack_dump.h"
 #include "core/linker.h"
@@ -38,7 +40,29 @@ struct WaitEntry {
 // a busy thread (the updater) would otherwise push the interesting entries out of a ring.
 std::map<u32, WaitEntry> g_last_wait;
 std::mutex g_ring_mutex;
-bool g_enabled = std::getenv("SHADPS4_DUMP_WAITS_AT") != nullptr;
+// SHADPS4_FREEZE_DUMP=<secs[,secs...]> is the one switch to reach for when the title hangs: it
+// turns on the wait ring, the semaphore event ring and the mutex contention tracer, and writes a
+// consolidated report so a single run is enough to see where every thread is stuck.
+bool g_freeze_dump = std::getenv("SHADPS4_FREEZE_DUMP") != nullptr;
+bool g_enabled = g_freeze_dump || std::getenv("SHADPS4_DUMP_WAITS_AT") != nullptr;
+
+std::filesystem::path FreezeReportPath() {
+    auto path = Common::FS::GetUserPath(Common::FS::PathType::LogDir);
+    path /= "freeze_report.txt";
+    return path;
+}
+
+void WriteFreezeReport(const std::string& text) {
+    if (!g_freeze_dump) {
+        return;
+    }
+    std::error_code ec;
+    std::ofstream out{FreezeReportPath(), std::ios::app};
+    if (!out) {
+        return;
+    }
+    out << text;
+}
 std::atomic<u32> g_tid_hint{0};
 } // namespace
 
@@ -107,8 +131,14 @@ void DumpGuestWaitRing() {
     }
     // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
+    std::string report;
     {
-        std::scoped_lock lk{g_sema_mutex};
+        char header[64];
+        std::snprintf(header, sizeof(header), "=== freeze dump #%u ===\n", index);
+        report += header;
+    }
+    {
+        std::scoped_lock sema_lock{g_sema_mutex};
         const u64 total = g_sema_index.load(std::memory_order_relaxed);
         const u64 count = total < SemaRingSize ? total : SemaRingSize;
         LOG_INFO(Kernel, "  last {} semaphore events (oldest first):", count);
@@ -116,6 +146,10 @@ void DumpGuestWaitRing() {
             const auto& ev = g_sema_ring[(total - count + i) % SemaRingSize];
             LOG_INFO(Kernel, "    {} handle={} count={} at={} ms", ev.kind, ev.handle, ev.count,
                      ev.ms);
+            char line[128];
+            std::snprintf(line, sizeof(line), "  sema %s handle=%u count=%d at=%llu ms\n", ev.kind,
+                          ev.handle, ev.count, static_cast<unsigned long long>(ev.ms));
+            report += line;
         }
     }
     auto* linker = Common::Singleton<Core::Linker>::Instance();
@@ -131,7 +165,13 @@ void DumpGuestWaitRing() {
         }
         LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} ({}) obj={:#x} at={} ms",
                  e.thread, e.tid, e.name, e.guest_ra, where, e.obj, e.ms);
+        char line[320];
+        std::snprintf(line, sizeof(line), "  thread='%s' tid=%u wait %s ra=0x%llx (%s) obj=0x%llx\n",
+                      e.thread, e.tid, e.name, static_cast<unsigned long long>(e.guest_ra),
+                      where.c_str(), static_cast<unsigned long long>(e.obj));
+        report += line;
     }
+    WriteFreezeReport(report);
 }
 
 void StartWaitRingDumpTimer() {
@@ -141,6 +181,9 @@ void StartWaitRingDumpTimer() {
             return;
         }
         const char* env = std::getenv("SHADPS4_DUMP_WAITS_AT");
+        if (env == nullptr && g_freeze_dump) {
+            env = std::getenv("SHADPS4_FREEZE_DUMP");
+        }
         std::vector<u64> times;
         std::string_view rest{env == nullptr ? "" : env};
         while (!rest.empty()) {
