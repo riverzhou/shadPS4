@@ -244,10 +244,21 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
     if (contention_ms != 0 && abstime == nullptr) {
         while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {
             Pthread* owner = m_owner.load(std::memory_order_acquire);
-            LOG_ERROR(Kernel, "mutex '{}' {} still locked after {} ms, owner='{}' tid={}", name,
-                      static_cast<void*>(this), contention_ms,
-                      owner != nullptr ? owner->name.c_str() : "(none)",
-                      owner != nullptr ? owner->tid.load() : -1);
+            const bool owner_dead = owner != nullptr && owner->state == PthreadState::Dead;
+            if (owner_dead) {
+                // A thread that dies while holding a mutex leaves it locked forever for everyone
+                // else. POSIX robust mutexes exist exactly for this; report it so the caller can
+                // tell "held by a live thread" from "held by a corpse".
+                LOG_ERROR(Kernel,
+                          "mutex '{}' {} held by dead thread '{}' tid={} for more than {} ms",
+                          name, static_cast<void*>(this), owner->name.c_str(), owner->tid.load(),
+                          contention_ms);
+            } else {
+                LOG_ERROR(Kernel, "mutex '{}' {} still locked after {} ms, owner='{}' tid={}", name,
+                          static_cast<void*>(this), contention_ms,
+                          owner != nullptr ? owner->name.c_str() : "(none)",
+                          owner != nullptr ? owner->tid.load() : -1);
+            }
         }
         m_owner.store(curthread, std::memory_order_release);
         return 0;
