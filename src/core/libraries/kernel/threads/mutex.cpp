@@ -255,7 +255,7 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         u64 waited_ms = 0;
         while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {
             waited_ms += contention_ms;
-            if (break_inversion && waited_ms >= 3000) {
+            if (break_inversion && waited_ms >= 1200) {
                 Pthread* owner = m_owner.load(std::memory_order_acquire);
                 if (owner != nullptr && Abandon()) {
                     LOG_WARNING(Kernel,
