@@ -74,6 +74,9 @@ struct SemaEvent {
     u64 ms;
 };
 constexpr std::size_t SemaRingSize = 4096;
+constexpr std::size_t MaxSemaHandles = 64;
+std::array<std::atomic<u32>, MaxSemaHandles> g_sema_waits{};
+std::array<std::atomic<u32>, MaxSemaHandles> g_sema_signals{};
 std::array<SemaEvent, SemaRingSize> g_sema_ring{};
 std::atomic<u64> g_sema_index{0};
 std::mutex g_sema_mutex;
@@ -84,6 +87,10 @@ void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
+    if (handle < MaxSemaHandles) {
+        auto& counter = kind[0] == 'w' ? g_sema_waits[handle] : g_sema_signals[handle];
+        counter.fetch_add(1, std::memory_order_relaxed);
+    }
     std::scoped_lock lk{g_sema_mutex};
     const u64 slot = g_sema_index.fetch_add(1, std::memory_order_relaxed);
     g_sema_ring[slot % SemaRingSize] = SemaEvent{kind, handle, count, tick};
@@ -136,6 +143,26 @@ void DumpGuestWaitRing() {
         char header[64];
         std::snprintf(header, sizeof(header), "=== freeze dump #%u ===\n", index);
         report += header;
+    }
+    {
+        // Totals per handle answer what a ring cannot: was this semaphore ever signalled?
+        bool any = false;
+        for (std::size_t h = 0; h < MaxSemaHandles; ++h) {
+            const u32 waits = g_sema_waits[h].load(std::memory_order_relaxed);
+            const u32 signals = g_sema_signals[h].load(std::memory_order_relaxed);
+            if (waits == 0 && signals == 0) {
+                continue;
+            }
+            any = true;
+            LOG_INFO(Kernel, "  sema handle {}: {} waits, {} signals", h, waits, signals);
+            char line[128];
+            std::snprintf(line, sizeof(line), "  sema handle %zu: %u waits, %u signals\n", h,
+                          waits, signals);
+            report += line;
+        }
+        if (any) {
+            report += "\n";
+        }
     }
     {
         std::scoped_lock sema_lock{g_sema_mutex};
