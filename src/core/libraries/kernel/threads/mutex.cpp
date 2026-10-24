@@ -383,6 +383,14 @@ void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name,
     if (!by_address && !by_name) {
         return;
     }
+    // Tracing a busy lock by name would flood the log, so for the name match only report the
+    // interesting case: a lock attempt that finds someone else holding it.
+    if (by_name && !by_address && object != nullptr) {
+        const auto* holder = object->m_owner.load(std::memory_order_acquire);
+        if (holder == nullptr || holder == g_curthread) {
+            return;  // nobody else is holding it: not interesting, and this is the hot path
+        }
+    }
     const auto* current = g_curthread;
     const Pthread* owner =
         object != nullptr ? object->m_owner.load(std::memory_order_acquire) : nullptr;
@@ -394,10 +402,41 @@ void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name,
              owner != nullptr ? owner->tid.load() : -1);
 }} // namespace
 
+
+// Hold-duration tracking for the traced locks: a mutex that is held for hundreds of milliseconds
+// while other threads pile up is a different problem from one that is merely busy.
+namespace {
+constexpr u64 HoldWarnMs = 100;
+std::mutex g_hold_lock;
+std::map<const void*, std::pair<u64, const Pthread*>> g_hold_start;
+
+u64 HoldNowMs() {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+}
+
+bool HoldTracking() {
+    static const bool on = std::getenv("SHADPS4_TRACE_MUTEX_NAME") != nullptr ||
+                           std::getenv("SHADPS4_TRACE_MUTEX_HOLD_MS") != nullptr;
+    return on;
+}
+
+bool HoldNameMatches(const char* name) {
+    static const char* needle = std::getenv("SHADPS4_TRACE_MUTEX_NAME");
+    return needle != nullptr && name != nullptr &&
+           std::string_view{name}.find(needle) != std::string_view::npos;
+}
+} // namespace
+
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX
-    TraceMutexAccess("lock", mutex, (*mutex) != nullptr ? (*mutex)->name.c_str() : nullptr,
-                     *mutex);
+    const char* trace_name = (*mutex) != nullptr ? (*mutex)->name.c_str() : nullptr;
+    TraceMutexAccess("lock", mutex, trace_name, *mutex);
+    if (HoldTracking() && HoldNameMatches(trace_name)) {
+        std::scoped_lock lk{g_hold_lock};
+        g_hold_start[*mutex] = {HoldNowMs(), g_curthread};
+    }
     RecordMutexGuestAddress(reinterpret_cast<u64>(*mutex), reinterpret_cast<u64>(mutex));
     RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(mutex));
@@ -457,7 +496,28 @@ s32 PthreadMutex::Unlock() {
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_unlock(PthreadMutexT* mutex) {
     PthreadMutex* mp = *mutex;
-    TraceMutexAccess("unlock", mutex, mp != nullptr ? mp->name.c_str() : nullptr, mp);
+    const char* unlock_name = mp != nullptr ? mp->name.c_str() : nullptr;
+    TraceMutexAccess("unlock", mutex, unlock_name, mp);
+    if (HoldTracking() && HoldNameMatches(unlock_name)) {
+        u64 started = 0;
+        const Pthread* owner = nullptr;
+        {
+            std::scoped_lock lk{g_hold_lock};
+            if (const auto it = g_hold_start.find(mp); it != g_hold_start.end()) {
+                started = it->second.first;
+                owner = it->second.second;
+                g_hold_start.erase(it);
+            }
+        }
+        if (started != 0) {
+            const u64 held = HoldNowMs() - started;
+            if (held >= HoldWarnMs) {
+                LOG_WARNING(Kernel, "traced mutex '{}' held for {} ms by '{}' tid={}", unlock_name,
+                            held, owner != nullptr ? owner->name.c_str() : "?",
+                            owner != nullptr ? owner->tid.load() : -1);
+            }
+        }
+    }
     if (mp <= THR_MUTEX_DESTROYED) [[unlikely]] {
         if (mp == THR_MUTEX_DESTROYED) {
             return POSIX_EINVAL;
