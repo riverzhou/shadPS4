@@ -108,6 +108,19 @@ std::map<u32, std::vector<HeldMutex>> g_held_mutexes;
 std::mutex g_held_mutex;
 } // namespace
 
+namespace {
+std::map<u64, u64> g_mutex_guest_addresses;
+std::mutex g_mutex_guest_addresses_lock;
+} // namespace
+
+void RecordMutexGuestAddress(u64 object, u64 guest_address) {
+    if (!g_enabled || object == 0 || guest_address == 0) {
+        return;
+    }
+    std::scoped_lock lk{g_mutex_guest_addresses_lock};
+    g_mutex_guest_addresses[object] = guest_address;
+}
+
 void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra) {
     if (!g_enabled) {
         return;
@@ -476,11 +489,19 @@ void DumpGuestWaitRing() {
                                 "which is parked in {}, while other threads keep blocking on it",
                                 info.name, info.owner_name, info.owner_tid, owner_wait);
                 }
+                u64 guest_address = 0;
+                {
+                    std::scoped_lock lk{g_mutex_guest_addresses_lock};
+                    if (const auto it = g_mutex_guest_addresses.find(address);
+                        it != g_mutex_guest_addresses.end()) {
+                        guest_address = it->second;
+                    }
+                }
                 LOG_INFO(Kernel,
-                         "    '{}' obj={:#x} owner='{}' tid={} waiting on {} (waiter ra={:#x}, {} "
-                         "hits)",
-                         info.name, address, info.owner_name, info.owner_tid, owner_wait,
-                         info.waiter_ra, info.hits);
+                         "    '{}' obj={:#x} guest={:#x} owner='{}' tid={} waiting on {} (waiter "
+                         "ra={:#x}, {} hits)",
+                         info.name, address, guest_address, info.owner_name, info.owner_tid,
+                         owner_wait, info.waiter_ra, info.hits);
                 report += std::string("    '") + info.name + "' obj=" + std::to_string(address) +
                           " owner='" + info.owner_name + "' tid=" +
                           std::to_string(info.owner_tid) + " waiting on " + owner_wait +

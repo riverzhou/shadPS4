@@ -349,22 +349,29 @@ u64 TracedMutexAddress() {
     return address;
 }
 
-void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name) {
+void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name,
+                      const PthreadMutex* object = nullptr) {
     const u64 address = TracedMutexAddress();
     if (address == 0 || reinterpret_cast<u64>(mutex) != address) {
         return;
     }
     const auto* current = g_curthread;
-    LOG_INFO(Kernel, "traced mutex {} by '{}' tid={} ra={:#x} ({})", what,
+    const Pthread* owner =
+        object != nullptr ? object->m_owner.load(std::memory_order_acquire) : nullptr;
+    LOG_INFO(Kernel, "traced mutex {} by '{}' tid={} ra={:#x} ({}) owner='{}' tid={}", what,
              current != nullptr ? current->name.c_str() : "?",
              current != nullptr ? current->tid.load() : 0,
-             reinterpret_cast<u64>(__builtin_return_address(0)), name != nullptr ? name : "?");
+             reinterpret_cast<u64>(__builtin_return_address(0)), name != nullptr ? name : "?",
+             owner != nullptr ? owner->name.c_str() : "(free)",
+             owner != nullptr ? owner->tid.load() : -1);
 }
 } // namespace
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX
-    TraceMutexAccess("lock", mutex, (*mutex) != nullptr ? (*mutex)->name.c_str() : nullptr);
+    TraceMutexAccess("lock", mutex, (*mutex) != nullptr ? (*mutex)->name.c_str() : nullptr,
+                     *mutex);
+    RecordMutexGuestAddress(reinterpret_cast<u64>(*mutex), reinterpret_cast<u64>(mutex));
     RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(mutex));
     return (*mutex)->Lock(nullptr);
@@ -423,7 +430,7 @@ s32 PthreadMutex::Unlock() {
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_unlock(PthreadMutexT* mutex) {
     PthreadMutex* mp = *mutex;
-    TraceMutexAccess("unlock", mutex, mp != nullptr ? mp->name.c_str() : nullptr);
+    TraceMutexAccess("unlock", mutex, mp != nullptr ? mp->name.c_str() : nullptr, mp);
     if (mp <= THR_MUTEX_DESTROYED) [[unlikely]] {
         if (mp == THR_MUTEX_DESTROYED) {
             return POSIX_EINVAL;

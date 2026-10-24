@@ -33,6 +33,10 @@ void RecordSemaOverflow(u32 handle);
 /// Track which mutexes a guest thread currently holds. A thread that parks on a semaphore while
 /// still holding a lock is a deadlock in progress, and this makes that visible in the dump.
 void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra);
+
+/// Remember where a host mutex object lives in guest memory, so a contention report can name the
+/// address the title itself uses (a static address is what a disassembly can point at).
+void RecordMutexGuestAddress(u64 object, u64 guest_address);
 void RecordMutexReleased(u32 tid, u64 mutex);
 
 /// Remember the owner reported by the contention tracer for a mutex address. The strings are
