@@ -25,7 +25,7 @@ void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_cou
 
 /// Track condition variable activity: how many threads wait on a condvar and when it was last
 /// signalled. A condvar with waiters but no recent signal is where a title hangs.
-void RecordCondWait(u64 cond);
+void RecordCondWait(u64 cond, u64 mutex);
 void RecordCondWaitDone(u64 cond);
 void RecordCondSignal(u64 cond, bool broadcast);
 void RecordSemaOverflow(u32 handle);

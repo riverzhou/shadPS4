@@ -201,6 +201,7 @@ std::mutex g_sema_info_lock;
 
 namespace {
 struct CondInfo {
+    u64 mutex{0};
     u32 waiters{0};
     u64 waits{0};
     u64 signals{0};
@@ -217,12 +218,13 @@ u64 NowMs() {
 }
 } // namespace
 
-void RecordCondWait(u64 cond) {
+void RecordCondWait(u64 cond, u64 mutex) {
     if (!g_enabled) {
         return;
     }
     std::scoped_lock lk{g_cond_info_lock};
     auto& info = g_cond_info[cond];
+    info.mutex = mutex;
     info.waiters++;
     info.waits++;
     info.last_wait_ms = NowMs();
@@ -413,10 +415,13 @@ void DumpGuestWaitRing() {
             }
             const u64 since_signal =
                 info.last_signal_ms == 0 ? ~u64{0} : now - info.last_signal_ms;
-            LOG_INFO(Kernel, "    cond={:#x} waiters={} waits={} signals={} last_signal={} ms ago",
-                     cond, info.waiters, info.waits, info.signals,
+            LOG_INFO(Kernel,
+                     "    cond={:#x} mutex={:#x} waiters={} waits={} signals={} last_signal={} ms "
+                     "ago",
+                     cond, info.mutex, info.waiters, info.waits, info.signals,
                      since_signal == ~u64{0} ? 0 : since_signal);
-            report += std::string("    cond=") + std::to_string(cond) + " waiters=" +
+            report += std::string("    cond=") + std::to_string(cond) + " mutex=" +
+                      std::to_string(info.mutex) + " waiters=" +
                       std::to_string(info.waiters) + " waits=" + std::to_string(info.waits) +
                       " signals=" + std::to_string(info.signals) + " last_signal=" +
                       (since_signal == ~u64{0} ? std::string("never") :

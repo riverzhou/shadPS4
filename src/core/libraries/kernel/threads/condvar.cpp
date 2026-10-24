@@ -211,7 +211,7 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mutex) {
-    RecordCondWait(reinterpret_cast<u64>(cond));
+    RecordCondWait(reinterpret_cast<u64>(cond), reinterpret_cast<u64>(mutex));
     RecordGuestWait("pthread_cond_wait", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(cond));
     PthreadCond* cvp{};
