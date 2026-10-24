@@ -337,8 +337,34 @@ s32 PS4_SYSV_ABI posix_pthread_mutex_trylock(PthreadMutexT* mutex) {
     return (*mutex)->TryLock();
 }
 
+namespace {
+// SHADPS4_TRACE_MUTEX_ADDR=0x... follows one specific mutex: every lock and unlock is logged with
+// the guest return address and the thread name. Useful when a title deadlocks on one lock that is
+// statically placed (a global), because its address is the same in every run.
+u64 TracedMutexAddress() {
+    static const u64 address = [] {
+        const char* env = std::getenv("SHADPS4_TRACE_MUTEX_ADDR");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : 0ull;
+    }();
+    return address;
+}
+
+void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name) {
+    const u64 address = TracedMutexAddress();
+    if (address == 0 || reinterpret_cast<u64>(mutex) != address) {
+        return;
+    }
+    const auto* current = g_curthread;
+    LOG_INFO(Kernel, "traced mutex {} by '{}' tid={} ra={:#x} ({})", what,
+             current != nullptr ? current->name.c_str() : "?",
+             current != nullptr ? current->tid.load() : 0,
+             reinterpret_cast<u64>(__builtin_return_address(0)), name != nullptr ? name : "?");
+}
+} // namespace
+
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX
+    TraceMutexAccess("lock", mutex, (*mutex) != nullptr ? (*mutex)->name.c_str() : nullptr);
     RecordGuestWait("pthread_mutex_lock", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(mutex));
     return (*mutex)->Lock(nullptr);
@@ -397,6 +423,7 @@ s32 PthreadMutex::Unlock() {
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_unlock(PthreadMutexT* mutex) {
     PthreadMutex* mp = *mutex;
+    TraceMutexAccess("unlock", mutex, mp != nullptr ? mp->name.c_str() : nullptr);
     if (mp <= THR_MUTEX_DESTROYED) [[unlikely]] {
         if (mp == THR_MUTEX_DESTROYED) {
             return POSIX_EINVAL;
