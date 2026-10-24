@@ -152,7 +152,22 @@ s32 PS4_SYSV_ABI sceVideoOutIsFlipPending(s32 handle) {
     return pending;
 }
 
+namespace {
+std::atomic<u64> g_last_flip_ms{0};
+
+u64 NowMs() {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+}
+} // namespace
+
+u64 LastFlipMs() {
+    return g_last_flip_ms.load(std::memory_order_relaxed);
+}
+
 s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode, s64 flipArg) {
+    g_last_flip_ms.store(NowMs(), std::memory_order_relaxed);
     auto* port = driver->GetPort(handle);
     if (!port) {
         LOG_ERROR(Lib_VideoOut, "Invalid handle = {}", handle);

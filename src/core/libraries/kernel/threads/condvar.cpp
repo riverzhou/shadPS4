@@ -223,6 +223,21 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
 
 int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mutex) {
     RecordCondWait(reinterpret_cast<u64>(cond), reinterpret_cast<u64>(mutex));
+    // SHADPS4_TRACE_COND_CALLER=1 walks three guest frames of a condition wait, so a wait can be
+    // attributed to the subsystem that called the wait helper (the HLE call runs on the guest
+    // stack, so these are guest return addresses).
+    static const bool trace_caller = std::getenv("SHADPS4_TRACE_COND_CALLER") != nullptr;
+    if (trace_caller) {
+        const auto* current = g_curthread;
+        LOG_INFO(Kernel,
+                 "cond wait guest={:#x} by '{}' tid={} ra0={:#x} ra1={:#x} ra2={:#x} ra3={:#x}",
+                 reinterpret_cast<u64>(cond), current != nullptr ? current->name.c_str() : "?",
+                 current != nullptr ? current->tid.load() : 0,
+                 reinterpret_cast<u64>(__builtin_return_address(0)),
+                 reinterpret_cast<u64>(__builtin_return_address(1)),
+                 reinterpret_cast<u64>(__builtin_return_address(2)),
+                 reinterpret_cast<u64>(__builtin_return_address(3)));
+    }
     RecordGuestWait("pthread_cond_wait", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(cond));
     PthreadCond* cvp{};

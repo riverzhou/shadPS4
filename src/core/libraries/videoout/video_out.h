@@ -128,6 +128,10 @@ s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate);
 s32 PS4_SYSV_ABI sceVideoOutIsFlipPending(s32 handle);
 s32 PS4_SYSV_ABI sceVideoOutWaitVblank(s32 handle);
 s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode, s64 flipArg);
+
+/// Milliseconds since the process start at the most recent flip submission. Automated input uses
+/// it to press only when the picture has settled, which is how a person drives a menu.
+u64 LastFlipMs();
 s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status);
 s32 PS4_SYSV_ABI sceVideoOutGetResolutionStatus(s32 handle, SceVideoOutResolutionStatus* status);
 s32 PS4_SYSV_ABI sceVideoOutOpen(Libraries::UserService::OrbisUserServiceUserId userId, s32 busType,
