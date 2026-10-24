@@ -235,6 +235,24 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         }
     }
 
+    // Env-gated: report a mutex that stays locked for a long time together with its owner, so a
+    // deadlocked title can be traced to the thread that never released it.
+    static const u64 contention_ms = [] {
+        const char* env = std::getenv("SHADPS4_TRACE_MUTEX_CONTENTION_MS");
+        return env != nullptr ? std::strtoull(env, nullptr, 10) : 0ull;
+    }();
+    if (contention_ms != 0 && abstime == nullptr) {
+        while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {
+            Pthread* owner = m_owner.load(std::memory_order_acquire);
+            LOG_ERROR(Kernel, "mutex '{}' {} still locked after {} ms, owner='{}' tid={}", name,
+                      static_cast<void*>(this), contention_ms,
+                      owner != nullptr ? owner->name.c_str() : "(none)",
+                      owner != nullptr ? owner->tid.load() : -1);
+        }
+        m_owner.store(curthread, std::memory_order_release);
+        return 0;
+    }
+
     s32 ret = 0;
     if (abstime == nullptr) {
         m_lock.lock();
