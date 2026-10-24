@@ -278,6 +278,42 @@ std::map<s32, std::string> ExtractTrophies(std::string_view npbind_guest,
     return trophy_index_map;
 }
 
+namespace {
+// The system font directories are user supplied. A real dump has several distinct files; a
+// single file copied under many names (a common placeholder setup) parses but renders the wrong
+// glyphs, and a missing file can make a title stall while it builds a text page. Say which
+// situation we are in once, at start-up, instead of leaving it to a mysterious hang.
+void CheckSystemFonts(const std::filesystem::path& font_dir,
+                      const std::filesystem::path& font2_dir) {
+    std::error_code ec;
+    std::map<std::uintmax_t, std::string> by_size;
+    std::vector<std::string> names;
+    for (const auto* dir : {&font_dir, &font2_dir}) {
+        for (const auto& entry : std::filesystem::directory_iterator(*dir, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            const auto name = entry.path().filename().string();
+            const auto size = entry.file_size(ec);
+            names.push_back(name);
+            if (!ec) {
+                by_size.emplace(size, name);
+            }
+        }
+    }
+    if (names.empty()) {
+        LOG_WARNING(Loader, "No system fonts in {}; text will be missing", font_dir.string());
+        return;
+    }
+    if (by_size.size() == 1 && names.size() > 1) {
+        LOG_WARNING(Loader,
+                    "All {} system fonts are the same file ({} bytes); this is a placeholder "
+                    "setup, not a firmware dump - expect wrong glyphs and possible stalls",
+                    names.size(), by_size.begin()->first);
+    }
+}
+} // namespace
+
 void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
                    std::optional<std::filesystem::path> p_game_folder,
                    std::vector<std::pair<std::filesystem::path, std::string>> mounts,
@@ -664,6 +700,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         mnt->Mount(mount_pair.first, mount_pair.second);
     }
 
+    CheckSystemFonts(host_font_dir, host_font2_dir);
     if (std::filesystem::is_empty(host_font_dir) || std::filesystem::is_empty(host_font2_dir)) {
         LOG_WARNING(Loader, "No dumped system fonts, expect missing text or instability");
     }
