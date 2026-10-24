@@ -15,7 +15,9 @@
 #include <vector>
 
 #include "common/logging/log.h"
+#include "common/singleton.h"
 #include "core/libraries/kernel/guest_stack_dump.h"
+#include "core/linker.h"
 #include "core/libraries/kernel/threads/pthread.h"
 
 namespace Libraries::Kernel {
@@ -81,9 +83,19 @@ void DumpGuestWaitRing() {
     }
     // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
+    auto* linker = Common::Singleton<Core::Linker>::Instance();
     for (const auto& [tid, e] : g_last_wait) {
-        LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} at={} ms", e.thread, e.tid,
-                 e.name, e.guest_ra, e.ms);
+        // Resolve the guest return address to its module so the dump points at a file that can be
+        // disassembled (the eboot is an encrypted SELF, so the offset is what matters there).
+        std::string where = "?";
+        if (auto* module = linker->FindByAddress(e.guest_ra); module != nullptr) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s+0x%llx", module->GetModuleInfo().name.data(),
+                          static_cast<unsigned long long>(e.guest_ra - module->GetBaseAddress()));
+            where = buf;
+        }
+        LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} ({} ) at={} ms", e.thread, e.tid,
+                 e.name, e.guest_ra, where, e.ms);
     }
 }
 
