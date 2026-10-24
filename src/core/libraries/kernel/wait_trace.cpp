@@ -95,6 +95,45 @@ std::atomic<u64> g_sema_index{0};
 std::mutex g_sema_mutex;
 } // namespace
 
+namespace {
+struct HeldMutex {
+    u64 mutex;
+    const char* name;
+    u64 guest_ra;
+};
+std::map<u32, std::vector<HeldMutex>> g_held_mutexes;
+std::mutex g_held_mutex;
+} // namespace
+
+void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_held_mutex};
+    g_held_mutexes[tid].push_back(HeldMutex{mutex, name, guest_ra});
+}
+
+void RecordMutexReleased(u32 tid, u64 mutex) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_held_mutex};
+    auto it = g_held_mutexes.find(tid);
+    if (it == g_held_mutexes.end()) {
+        return;
+    }
+    auto& held = it->second;
+    for (auto m = held.rbegin(); m != held.rend(); ++m) {
+        if (m->mutex == mutex) {
+            held.erase(std::next(m).base());
+            break;
+        }
+    }
+    if (held.empty()) {
+        g_held_mutexes.erase(it);
+    }
+}
+
 void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
     const u64 tick = static_cast<u64>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -153,49 +192,40 @@ void DumpGuestWaitRing() {
         LOG_INFO(Kernel, "guest wait ring #{} skipped (ring busy)", index);
         return;
     }
-    // The index keeps consecutive dumps distinct so the log's duplicate filter cannot drop them.
+    const std::string nl(1, static_cast<char>(10));
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
-    std::string report;
-    {
-        char header[64];
-        std::snprintf(header, sizeof(header), "=== freeze dump #%u ===\n", index);
-        report += header;
-    }
-    {
-        // Totals per handle answer what a ring cannot: was this semaphore ever signalled?
-        bool any = false;
-        for (std::size_t h = 0; h < MaxSemaHandles; ++h) {
-            const u32 waits = g_sema_waits[h].load(std::memory_order_relaxed);
-            const u32 signals = g_sema_signals[h].load(std::memory_order_relaxed);
-            if (waits == 0 && signals == 0) {
-                continue;
-            }
-            any = true;
-            LOG_INFO(Kernel, "  sema handle {}: {} waits, {} signals", h, waits, signals);
-            char line[128];
-            std::snprintf(line, sizeof(line), "  sema handle %zu: %u waits, %u signals\n", h,
-                          waits, signals);
-            report += line;
+    std::string report = "=== freeze dump #" + std::to_string(index) + " ===" + nl;
+
+    // Totals per handle answer what a ring cannot: was this semaphore ever signalled?
+    for (std::size_t h = 0; h < MaxSemaHandles; ++h) {
+        const u32 waits = g_sema_waits[h].load(std::memory_order_relaxed);
+        const u32 signals = g_sema_signals[h].load(std::memory_order_relaxed);
+        if (waits == 0 && signals == 0) {
+            continue;
         }
-        if (any) {
-            report += "\n";
-        }
+        LOG_INFO(Kernel, "  sema handle {}: {} waits, {} signals", h, waits, signals);
+        report += "  sema handle " + std::to_string(h) + ": " + std::to_string(waits) +
+                  " waits, " + std::to_string(signals) + " signals" + nl;
     }
+
     {
         std::scoped_lock sema_lock{g_sema_mutex};
         const u64 total = g_sema_index.load(std::memory_order_relaxed);
         const u64 count = total < SemaRingSize ? total : SemaRingSize;
         LOG_INFO(Kernel, "  last {} semaphore events (oldest first):", count);
+        u64 first = count > 200 ? count - 200 : 0;
         for (u64 i = 0; i < count; ++i) {
             const auto& ev = g_sema_ring[(total - count + i) % SemaRingSize];
             LOG_INFO(Kernel, "    {} handle={} count={} at={} ms", ev.kind, ev.handle, ev.count,
                      ev.ms);
-            char line[128];
-            std::snprintf(line, sizeof(line), "  sema %s handle=%u count=%d at=%llu ms\n", ev.kind,
-                          ev.handle, ev.count, static_cast<unsigned long long>(ev.ms));
-            report += line;
+            if (i < first) {
+                continue;
+            }
+            report += "  sema " + std::string(ev.kind) + " handle=" + std::to_string(ev.handle) +
+                      " count=" + std::to_string(ev.count) + nl;
         }
     }
+
     auto* linker = Common::Singleton<Core::Linker>::Instance();
     for (const auto& [tid, e] : g_last_wait) {
         // Resolve the guest return address to its module so the dump points at a file that can be
@@ -209,13 +239,33 @@ void DumpGuestWaitRing() {
         }
         LOG_INFO(Kernel, "  thread='{}' tid={} wait {:<22} ra={:#x} ({}) obj={:#x} at={} ms",
                  e.thread, e.tid, e.name, e.guest_ra, where, e.obj, e.ms);
-        char line[320];
-        std::snprintf(line, sizeof(line), "  thread='%s' tid=%u wait %s ra=0x%llx (%s) obj=0x%llx\n",
-                      e.thread, e.tid, e.name, static_cast<unsigned long long>(e.guest_ra),
-                      where.c_str(), static_cast<unsigned long long>(e.obj));
-        report += line;
+        report += std::string("  thread='") + e.thread + "' tid=" + std::to_string(e.tid) +
+                  " wait " + e.name + " ra=" + std::to_string(e.guest_ra) + " (" + where +
+                  ") obj=" + std::to_string(e.obj) + nl;
+        {
+            std::scoped_lock held_lock{g_held_mutex};
+            auto held_it = g_held_mutexes.find(e.tid);
+            if (held_it != g_held_mutexes.end()) {
+                for (const auto& held : held_it->second) {
+                    LOG_INFO(Kernel, "      holds '{}' obj={:#x}", held.name, held.mutex);
+                    report += std::string("      holds '") + held.name + "' obj=" +
+                              std::to_string(held.mutex) + nl;
+                }
+            }
+        }
+        auto hist_it = g_history.find(e.tid);
+        if (hist_it != g_history.end()) {
+            const auto& hist = hist_it->second;
+            const u32 shown = std::min<u32>(hist.count, HistorySize);
+            for (u32 i = 0; i < shown; ++i) {
+                const auto& h = hist.entries[(hist.count - shown + i) % HistorySize];
+                report += std::string("      recent: ") + h.name + " ra=" +
+                          std::to_string(h.guest_ra) + " at=" + std::to_string(h.ms) + nl;
+            }
+        }
     }
     WriteFreezeReport(report);
+
     // A late image dump has a resolved import GOT, so a PLT stub in a wait site can be mapped
     // back to the API it calls (the start-up dump happens before relocation).
     if (const char* module_dir = std::getenv("SHADPS4_DUMP_MODULE_DIR"); module_dir != nullptr) {

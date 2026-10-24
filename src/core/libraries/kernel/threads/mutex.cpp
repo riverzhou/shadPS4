@@ -205,6 +205,11 @@ s32 PthreadMutex::SelfLock(const OrbisKernelTimespec* abstime, u64 usec) {
 
 s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
     Pthread* curthread = g_curthread;
+    const auto RecordAcquired = [this](Pthread* thread) {
+        m_owner.store(thread, std::memory_order_release);
+        RecordMutexAcquired(static_cast<u32>(thread->tid.load()), reinterpret_cast<u64>(this),
+                            name.c_str(), reinterpret_cast<u64>(__builtin_return_address(0)));
+    };
     if (m_owner.load(std::memory_order_acquire) == curthread) {
         return SelfLock(abstime, usec);
     }
@@ -219,7 +224,7 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         s32 count = m_spinloops;
         while (count--) {
             if (m_lock.try_lock()) {
-                m_owner.store(curthread, std::memory_order_release);
+                RecordAcquired(curthread);
                 return 0;
             }
             CPU_SPINWAIT;
@@ -229,7 +234,7 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         while (count--) {
             std::this_thread::yield();
             if (m_lock.try_lock()) {
-                m_owner.store(curthread, std::memory_order_release);
+                RecordAcquired(curthread);
                 return 0;
             }
         }
@@ -264,7 +269,7 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
                           owner != nullptr ? owner->tid.load() : -1);
             }
         }
-        m_owner.store(curthread, std::memory_order_release);
+        RecordAcquired(curthread);
         return 0;
     }
 
@@ -283,6 +288,11 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
     }
     if (ret == 0) {
         m_owner.store(curthread, std::memory_order_release);
+        if (g_curthread != nullptr) {
+            RecordMutexAcquired(static_cast<u32>(g_curthread->tid.load()),
+                                reinterpret_cast<u64>(this), name.c_str(),
+                                reinterpret_cast<u64>(__builtin_return_address(0)));
+        }
     }
     return ret;
 }
@@ -339,6 +349,10 @@ s32 PthreadMutex::Unlock() {
 
         m_owner.store(nullptr, std::memory_order_release);
         m_lock.unlock();
+        if (g_curthread != nullptr) {
+            RecordMutexReleased(static_cast<u32>(g_curthread->tid.load()),
+                                reinterpret_cast<u64>(this));
+        }
 
         if (curthread->will_sleep == 0 && deferred) {
             curthread->WakeAll();

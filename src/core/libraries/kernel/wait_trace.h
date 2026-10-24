@@ -18,6 +18,11 @@ void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 /// semaphore a frozen thread blocks on was ever signalled afterwards.
 void RecordSemaEvent(const char* kind, u32 handle, s32 count);
 
+/// Track which mutexes a guest thread currently holds. A thread that parks on a semaphore while
+/// still holding a lock is a deadlock in progress, and this makes that visible in the dump.
+void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra);
+void RecordMutexReleased(u32 tid, u64 mutex);
+
 /// Schedule dumps of the wait ring at the comma separated seconds in SHADPS4_DUMP_WAITS_AT.
 void StartWaitRingDumpTimer();
 
