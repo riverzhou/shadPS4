@@ -376,7 +376,11 @@ u64 TracedMutexAddress() {
 void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name,
                       const PthreadMutex* object = nullptr) {
     const u64 address = TracedMutexAddress();
-    if (address == 0 || reinterpret_cast<u64>(mutex) != address) {
+    static const char* name_needle = std::getenv("SHADPS4_TRACE_MUTEX_NAME");
+    const bool by_address = address != 0 && reinterpret_cast<u64>(mutex) == address;
+    const bool by_name = name_needle != nullptr && name != nullptr &&
+                         std::string_view{name}.find(name_needle) != std::string_view::npos;
+    if (!by_address && !by_name) {
         return;
     }
     const auto* current = g_curthread;
