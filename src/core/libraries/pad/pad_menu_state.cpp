@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdint>
 #include "core/libraries/pad/pad_menu_state.h"
 
 #include <algorithm>
@@ -46,6 +47,13 @@ std::atomic<bool> g_started{false};
 std::atomic<bool> g_settings_visible{false};
 std::atomic<bool> g_movie_visible{false};
 std::atomic<int> g_settings_pages{0};
+std::atomic<std::uint64_t> g_settings_since_ms{0};
+
+std::uint64_t NowMs() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+}
 
 std::filesystem::path FindUiLog() {
     std::error_code ec;
@@ -109,7 +117,12 @@ void ApplyChunk(std::string& window, std::string_view chunk) {
     if (visible && pages >= 2) {
         visible = false;
     }
-    g_settings_visible.store(visible, std::memory_order_relaxed);
+    const bool was_visible = g_settings_visible.exchange(visible, std::memory_order_relaxed);
+    if (visible && !was_visible) {
+        g_settings_since_ms.store(NowMs(), std::memory_order_relaxed);
+    } else if (!visible) {
+        g_settings_since_ms.store(0, std::memory_order_relaxed);
+    }
 }
 
 void WatchLoop() {
@@ -159,6 +172,15 @@ void WatchLoop() {
 }
 
 } // namespace
+
+unsigned SettingsVisibleMs() {
+    const std::uint64_t since = g_settings_since_ms.load(std::memory_order_relaxed);
+    if (since == 0) {
+        return 0;
+    }
+    const std::uint64_t now = NowMs();
+    return now > since ? static_cast<unsigned>(now - since) : 0;
+}
 
 int SettingsPagesFinalized() {
     return g_settings_pages.load(std::memory_order_relaxed);

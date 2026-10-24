@@ -24,4 +24,8 @@ MenuScreen GetMenuScreen();
 /// automated input uses this to stop pressing instead of walking the menus behind it.
 int SettingsPagesFinalized();
 
+/// How long the display-settings screen has been on display, in milliseconds (0 when it is not).
+/// Pressing during the first second of a page's entry animation was measured to freeze the title.
+unsigned SettingsVisibleMs();
+
 } // namespace Libraries::Pad
