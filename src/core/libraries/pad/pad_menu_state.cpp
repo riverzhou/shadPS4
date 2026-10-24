@@ -32,6 +32,11 @@ namespace {
 constexpr std::string_view MARKER_SETTINGS_START = "StartUpSetting.App onLoad";
 constexpr std::string_view MARKER_SETTINGS_END = "StartUpSetting.App onUnload";
 constexpr std::string_view MARKER_SPLASH = "SplashRootEvent onInitialize";
+// The title never logs "StartUpSetting.App onUnload" when the wizard completes: it jumps straight
+// to the next screen, so the App stays "onLoad" forever and the settings branch kept injecting
+// direction presses into the menus behind it. Each finished wizard page logs a finalize line, and
+// two of them mean the wizard is over.
+constexpr std::string_view MARKER_SETTINGS_PAGE = "SDRSettingRootEvent onFinalize";
 constexpr std::string_view MARKER_MOVIE_START = "MovieFaceEvent onInitialize";
 constexpr std::string_view MARKER_MOVIE_END = "MovieFaceEvent::onMovieFinish";
 constexpr std::string_view UI_LOG_RELATIVE = "APP_DATA/logs/archived.log";
@@ -93,7 +98,17 @@ void ApplyChunk(std::string& window, std::string_view chunk) {
     }
     const auto end = std::max(end_unload == std::string::npos ? 0 : end_unload,
                               end_splash == std::string::npos ? 0 : end_splash);
-    const bool visible = end == 0 || start > end;
+    bool visible = end == 0 || start > end;
+    if (visible) {
+        std::size_t pages = 0;
+        for (auto at = window.find(MARKER_SETTINGS_PAGE); at != std::string::npos;
+             at = window.find(MARKER_SETTINGS_PAGE, at + 1)) {
+            ++pages;
+        }
+        if (pages >= 2) {
+            visible = false;
+        }
+    }
     g_settings_visible.store(visible, std::memory_order_relaxed);
 }
 
