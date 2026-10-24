@@ -191,6 +191,12 @@ void ImageInfo::UpdateSize() noexcept {
         LOG_WARNING(Render_Vulkan, "Image with invalid sample count {}, using 1", num_samples);
         num_samples = 1;
     }
+    if (resources.layers == 0) {
+        // A transient garbage layer count would later divide by zero when the mip layout is
+        // searched by guest address; a single layer is the only safe interpretation.
+        LOG_WARNING(Render_Vulkan, "Image with zero layers, using 1");
+        resources.layers = 1;
+    }
     if (num_bits == 0) {
         LOG_WARNING(Render_Vulkan, "Image with unknown data format, ignoring its size");
         guest_size = 0;
@@ -245,7 +251,11 @@ s32 ImageInfo::MipOf(const ImageInfo& info) const {
         const auto& [mip_size, mip_pitch, mip_height, mip_ofs] = info.mips_layout[m];
         const VAddr mip_base = info.guest_address + mip_ofs;
         const VAddr mip_end = mip_base + mip_size;
-        const u32 slice_size = mip_size / info.resources.layers;
+        const u32 slice_size =
+            info.resources.layers != 0 ? mip_size / info.resources.layers : mip_size;
+        if (slice_size == 0) {
+            continue;
+        }
         if (guest_address >= mip_base && guest_address < mip_end &&
             (guest_address - mip_base) % slice_size == 0 &&
             (pitch >> this_dim) == (mip_pitch >> info_dim)) {
