@@ -250,8 +250,21 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         // The unified freeze switch also enables the contention tracer with a sane threshold.
         return std::getenv("SHADPS4_FREEZE_DUMP") != nullptr ? 300ull : 0ull;
     }();
+    static const bool break_inversion = std::getenv("SHADPS4_BREAK_LOCK_INVERSION") != nullptr;
     if (contention_ms != 0 && abstime == nullptr) {
+        u64 waited_ms = 0;
         while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {
+            waited_ms += contention_ms;
+            if (break_inversion && waited_ms >= 3000) {
+                Pthread* owner = m_owner.load(std::memory_order_acquire);
+                if (owner != nullptr && Abandon()) {
+                    LOG_WARNING(Kernel,
+                                "abandoning mutex '{}' held by '{}' tid={} for {} ms instead of "
+                                "blocking forever (SHADPS4_BREAK_LOCK_INVERSION)",
+                                name, owner->name.c_str(), owner->tid.load(), waited_ms);
+                    continue;
+                }
+            }
             Pthread* owner = m_owner.load(std::memory_order_acquire);
             const bool owner_dead = owner != nullptr && owner->state == PthreadState::Dead;
             if (owner != nullptr) {

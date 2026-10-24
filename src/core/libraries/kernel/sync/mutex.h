@@ -9,6 +9,7 @@
 
 #ifdef _WIN64
 #include <windows.h>
+#include <cstdio>
 #else
 #include <mutex>
 #endif
@@ -66,6 +67,25 @@ public:
         }
 #else
         return mtx.try_lock_until(abs_time);
+#endif
+    }
+
+    // Experimental: abandon a mutex that is owned by a thread that will never release it (it is
+    // parked in an unrelated wait). The old handle is leaked on purpose, because the original
+    // owner may still call unlock on it; a fresh, unlocked handle takes its place so the blocked
+    // threads can make progress. Only used behind SHADPS4_BREAK_LOCK_INVERSION.
+    bool AbandonLock() {
+#ifdef _WIN64
+        HANDLE fresh = CreateMutexW(nullptr, FALSE, nullptr);
+        if (fresh == nullptr) {
+            std::fprintf(stderr, "[gt7] AbandonLock failed (%lu)", GetLastError());
+            std::fputc(10, stderr);
+            return false;
+        }
+        mtx = fresh;
+        return true;
+#else
+        return false;
 #endif
     }
 

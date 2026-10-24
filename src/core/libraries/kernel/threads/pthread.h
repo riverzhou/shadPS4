@@ -112,6 +112,16 @@ struct PthreadMutex {
 
     int Unlock();
 
+    /// Experimental recovery for a lock order inversion (see SHADPS4_BREAK_LOCK_INVERSION).
+    bool Abandon() {
+        if (!m_lock.AbandonLock()) {
+            return false;
+        }
+        m_count = 0;
+        m_owner.store(nullptr, std::memory_order_release);
+        return true;
+    }
+
     int CvUnlock(int* recurse) {
         *recurse = m_count;
         m_count = 0;
