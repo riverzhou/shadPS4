@@ -76,7 +76,18 @@ static int InitStatic(Pthread* thread, PthreadCondT* cond) {
 
 int PS4_SYSV_ABI posix_pthread_cond_init(PthreadCondT* cond, const PthreadCondAttrT* cond_attr) {
     *cond = nullptr;
-    return CondInit(cond, cond_attr, nullptr);
+    const s32 result = CondInit(cond, cond_attr, nullptr);
+    // SHADPS4_TRACE_COND_INIT=1 reports where a condvar was created and where its storage lives,
+    // so a condvar seen in a freeze dump can be traced back to the subsystem that owns it.
+    static const bool trace_init = std::getenv("SHADPS4_TRACE_COND_INIT") != nullptr;
+    if (trace_init) {
+        const auto* current = g_curthread;
+        LOG_INFO(Kernel, "cond init guest={:#x} by '{}' tid={} ra={:#x}",
+                 reinterpret_cast<u64>(cond), current != nullptr ? current->name.c_str() : "?",
+                 current != nullptr ? current->tid.load() : 0,
+                 reinterpret_cast<u64>(__builtin_return_address(0)));
+    }
+    return result;
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_setname_np(PthreadCondT* cond, const char* name) {
