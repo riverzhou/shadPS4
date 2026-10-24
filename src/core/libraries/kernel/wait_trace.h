@@ -23,6 +23,11 @@ void RecordSemaEvent(const char* kind, u32 handle, s32 count);
 void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra);
 void RecordMutexReleased(u32 tid, u64 mutex);
 
+/// Remember the owner reported by the contention tracer for a mutex address. The strings are
+/// copied, so nothing dangles when the mutex is destroyed later.
+void RecordMutexOwner(u64 mutex, const char* name, u32 owner_tid, const char* owner_name,
+                      u64 waiter_ra);
+
 /// Schedule dumps of the wait ring at the comma separated seconds in SHADPS4_DUMP_WAITS_AT.
 void StartWaitRingDumpTimer();
 

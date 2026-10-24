@@ -119,6 +119,32 @@ void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra) {
     g_held_mutexes[tid].push_back(HeldMutex{mutex, name, guest_ra});
 }
 
+namespace {
+struct OwnerInfo {
+    std::string name;
+    std::string owner_name;
+    u32 owner_tid;
+    u64 waiter_ra;
+    u32 hits;
+};
+std::map<u64, OwnerInfo> g_mutex_owners;
+std::mutex g_mutex_owners_lock;
+} // namespace
+
+void RecordMutexOwner(u64 mutex, const char* name, u32 owner_tid, const char* owner_name,
+                      u64 waiter_ra) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_mutex_owners_lock};
+    auto& info = g_mutex_owners[mutex];
+    info.name = name != nullptr ? name : "?";
+    info.owner_name = owner_name != nullptr ? owner_name : "?";
+    info.owner_tid = owner_tid;
+    info.waiter_ra = waiter_ra;
+    info.hits++;
+}
+
 void RecordMutexReleased(u32 tid, u64 mutex) {
     if (!g_enabled) {
         return;
@@ -273,6 +299,32 @@ void DumpGuestWaitRing() {
                 const auto& h = hist.entries[(hist.count - shown + i) % HistorySize];
                 report += std::string("      recent: ") + h.name + " ra=" +
                           std::to_string(h.guest_ra) + " at=" + std::to_string(h.ms) + nl;
+            }
+        }
+    }
+    {
+        std::scoped_lock lk{g_mutex_owners_lock};
+        if (!g_mutex_owners.empty()) {
+            LOG_INFO(Kernel, "  contended mutexes and their owners:");
+            report += "  contended mutexes and their owners:" + nl;
+            for (const auto& [address, info] : g_mutex_owners) {
+                // Name what the owner is blocked in: a lock that stays held while its owner waits
+                // is either a lock order inversion or a lock that was never released.
+                std::string owner_wait = "?";
+                if (const auto it = g_last_wait.find(info.owner_tid); it != g_last_wait.end()) {
+                    owner_wait = std::string(it->second.name) + " obj=" +
+                                 std::to_string(it->second.obj);
+                }
+                LOG_INFO(Kernel,
+                         "    '{}' obj={:#x} owner='{}' tid={} waiting on {} (waiter ra={:#x}, {} "
+                         "hits)",
+                         info.name, address, info.owner_name, info.owner_tid, owner_wait,
+                         info.waiter_ra, info.hits);
+                report += std::string("    '") + info.name + "' obj=" + std::to_string(address) +
+                          " owner='" + info.owner_name + "' tid=" +
+                          std::to_string(info.owner_tid) + " waiting on " + owner_wait +
+                          " (waiter ra=" + std::to_string(info.waiter_ra) + ", " +
+                          std::to_string(info.hits) + " hits)" + nl;
             }
         }
     }

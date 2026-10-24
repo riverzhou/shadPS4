@@ -254,6 +254,11 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         while (!m_lock.try_lock_for(std::chrono::milliseconds(contention_ms))) {
             Pthread* owner = m_owner.load(std::memory_order_acquire);
             const bool owner_dead = owner != nullptr && owner->state == PthreadState::Dead;
+            if (owner != nullptr) {
+                RecordMutexOwner(reinterpret_cast<u64>(this), name.c_str(), owner->tid.load(),
+                                 owner->name.c_str(),
+                                 reinterpret_cast<u64>(__builtin_return_address(0)));
+            }
             if (owner_dead) {
                 // A thread that dies while holding a mutex leaves it locked forever for everyone
                 // else. POSIX robust mutexes exist exactly for this; report it so the caller can
