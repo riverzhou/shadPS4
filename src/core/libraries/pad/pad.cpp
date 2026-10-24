@@ -211,8 +211,8 @@ int PS4_SYSV_ABI scePadGetExtControllerInformation(s32 handle,
 }
 
 int PS4_SYSV_ABI scePadGetExtensionUnitInfo() {
-    LOG_INFO(Lib_Pad, "scePadGetExtensionUnitInfo: no extension unit present");
-    return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
+    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI scePadGetFeatureReport() {
@@ -384,10 +384,8 @@ int PS4_SYSV_ABI scePadOpenExt(Libraries::UserService::OrbisUserServiceUserId us
 }
 
 int PS4_SYSV_ABI scePadOpenExt2() {
-    // No extended (light bar / touch / motion) controller is present. Reporting success without
-    // filling the structures makes a title poll forever, so say plainly that it is absent.
-    LOG_INFO(Lib_Pad, "scePadOpenExt2: no extended controller present");
-    return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
+    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI scePadOutputReport() {
