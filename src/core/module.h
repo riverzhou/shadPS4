@@ -196,6 +196,7 @@ public:
     }
 
     void DumpLoadedImage() const;
+    void DumpImageTo(const std::filesystem::path& dir) const;
 
     std::span<const LibraryInfo> GetExportLibs() const {
         return dynamic_info.export_libs;

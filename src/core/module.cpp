@@ -103,15 +103,22 @@ void Module::DumpLoadedImage() const {
     // code at guest address base + N. The eboot and the game-provided modules are encrypted
     // SELFs, so this dump is the only way to disassemble a guest return address outside IDA.
     static const char* out_dir = std::getenv("SHADPS4_DUMP_MODULE_DIR");
-    if (out_dir == nullptr || base_virtual_addr == 0) {
+    if (out_dir == nullptr) {
+        return;
+    }
+    DumpImageTo(out_dir);
+}
+
+void Module::DumpImageTo(const std::filesystem::path& dir) const {
+    if (base_virtual_addr == 0) {
         return;
     }
     std::error_code ec;
-    std::filesystem::create_directories(out_dir, ec);
+    std::filesystem::create_directories(dir, ec);
     if (ec) {
         return;
     }
-    const auto path = std::filesystem::path{out_dir} / (name + ".img");
+    const auto path = dir / (name + ".img");
     Common::FS::IOFile out{path, Common::FS::FileAccessMode::Create, Common::FS::FileType::BinaryFile};
     if (!out.IsOpen()) {
         return;

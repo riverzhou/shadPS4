@@ -283,6 +283,14 @@ s32 Linker::LoadAndStartModule(const std::filesystem::path& path, u64 args, cons
     return handle;
 }
 
+void Linker::DumpAllModules(const std::filesystem::path& dir) const {
+    for (const auto& module : m_modules) {
+        if (module) {
+            module->DumpImageTo(dir);
+        }
+    }
+}
+
 Module* Linker::FindByAddress(VAddr address) {
     for (auto& module : m_modules) {
         const VAddr base = module->GetBaseAddress();

@@ -199,6 +199,14 @@ void DumpGuestWaitRing() {
         report += line;
     }
     WriteFreezeReport(report);
+    // A late image dump has a resolved import GOT, so a PLT stub in a wait site can be mapped
+    // back to the API it calls (the start-up dump happens before relocation).
+    if (const char* module_dir = std::getenv("SHADPS4_DUMP_MODULE_DIR"); module_dir != nullptr) {
+        static std::atomic<u32> dumps{0};
+        if (dumps.fetch_add(1, std::memory_order_relaxed) == 0) {
+            linker->DumpAllModules(std::filesystem::path{module_dir} / "late");
+        }
+    }
 }
 
 void StartWaitRingDumpTimer() {

@@ -154,6 +154,10 @@ public:
     s32 LoadModule(const std::filesystem::path& elf_name, bool is_dynamic = false);
     s32 LoadAndStartModule(const std::filesystem::path& path, u64 args, const void* argp,
                            int* pRes);
+    // Dump every loaded module as a flat image. Called late (e.g. from a freeze dump) so the
+    // import GOT is already resolved and stubs can be mapped back to their API.
+    void DumpAllModules(const std::filesystem::path& dir) const;
+
     Module* FindByAddress(VAddr address);
 
     void Relocate(Module* module);
