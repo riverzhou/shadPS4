@@ -39,6 +39,19 @@ struct WaitEntry {
 // One entry per guest thread: a deadlock snapshot needs the *current* wait of every thread, and
 // a busy thread (the updater) would otherwise push the interesting entries out of a ring.
 std::map<u32, WaitEntry> g_last_wait;
+// The last few synchronisation calls of every thread: a blocked worker that took a lock right
+// before parking shows up here even though only its final wait is recorded above.
+constexpr std::size_t HistorySize = 8;
+struct HistoryEntry {
+    const char* name;
+    u64 guest_ra;
+    u64 ms;
+};
+struct History {
+    std::array<HistoryEntry, HistorySize> entries{};
+    u32 count{0};
+};
+std::map<u32, History> g_history;
 std::mutex g_ring_mutex;
 // SHADPS4_FREEZE_DUMP=<secs[,secs...]> is the one switch to reach for when the title hangs: it
 // turns on the wait ring, the semaphore event ring and the mutex contention tracer, and writes a
@@ -123,6 +136,10 @@ void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
     if (g_last_wait.size() < 400 || g_last_wait.contains(entry.tid)) {
         g_last_wait[entry.tid] = entry;
     }
+    auto& hist = g_history[entry.tid];
+    auto& slot = hist.entries[hist.count % HistorySize];
+    slot = HistoryEntry{name, guest_ra, now};
+    hist.count++;
 }
 
 void DumpGuestWaitRing() {
@@ -197,7 +214,6 @@ void DumpGuestWaitRing() {
                       e.thread, e.tid, e.name, static_cast<unsigned long long>(e.guest_ra),
                       where.c_str(), static_cast<unsigned long long>(e.obj));
         report += line;
-    }
     WriteFreezeReport(report);
     // A late image dump has a resolved import GOT, so a PLT stub in a wait site can be mapped
     // back to the API it calls (the start-up dump happens before relocation).
