@@ -186,6 +186,59 @@ std::map<u32, SemaInfo> g_sema_info;
 std::mutex g_sema_info_lock;
 } // namespace
 
+namespace {
+struct CondInfo {
+    u32 waiters{0};
+    u64 waits{0};
+    u64 signals{0};
+    u64 last_wait_ms{0};
+    u64 last_signal_ms{0};
+};
+std::map<u64, CondInfo> g_cond_info;
+std::mutex g_cond_info_lock;
+
+u64 NowMs() {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+}
+} // namespace
+
+void RecordCondWait(u64 cond) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_cond_info_lock};
+    auto& info = g_cond_info[cond];
+    info.waiters++;
+    info.waits++;
+    info.last_wait_ms = NowMs();
+}
+
+void RecordCondWaitDone(u64 cond) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_cond_info_lock};
+    auto it = g_cond_info.find(cond);
+    if (it != g_cond_info.end() && it->second.waiters > 0) {
+        it->second.waiters--;
+    }
+}
+
+void RecordCondSignal(u64 cond, bool broadcast) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_cond_info_lock};
+    auto& info = g_cond_info[cond];
+    info.signals++;
+    info.last_signal_ms = NowMs();
+    if (broadcast && info.waiters > 0) {
+        info.waiters = 0;
+    }
+}
+
 void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_count) {
     if (!g_enabled) {
         return;
@@ -332,6 +385,31 @@ void DumpGuestWaitRing() {
         }
     }
 
+    {
+        std::scoped_lock lk{g_cond_info_lock};
+        const u64 now = NowMs();
+        bool announced = false;
+        for (const auto& [cond, info] : g_cond_info) {
+            if (info.waiters == 0) {
+                continue;
+            }
+            if (!announced) {
+                LOG_INFO(Kernel, "  condvars with waiters:");
+                report += "  condvars with waiters:" + nl;
+                announced = true;
+            }
+            const u64 since_signal =
+                info.last_signal_ms == 0 ? ~u64{0} : now - info.last_signal_ms;
+            LOG_INFO(Kernel, "    cond={:#x} waiters={} waits={} signals={} last_signal={} ms ago",
+                     cond, info.waiters, info.waits, info.signals,
+                     since_signal == ~u64{0} ? 0 : since_signal);
+            report += std::string("    cond=") + std::to_string(cond) + " waiters=" +
+                      std::to_string(info.waiters) + " waits=" + std::to_string(info.waits) +
+                      " signals=" + std::to_string(info.signals) + " last_signal=" +
+                      (since_signal == ~u64{0} ? std::string("never") :
+                                                 std::to_string(since_signal) + " ms ago") + nl;
+        }
+    }
     auto* linker = Common::Singleton<Core::Linker>::Instance();
     for (const auto& [tid, e] : g_last_wait) {
         // Resolve the guest return address to its module so the dump points at a file that can be

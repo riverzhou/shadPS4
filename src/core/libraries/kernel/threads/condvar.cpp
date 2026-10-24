@@ -211,6 +211,7 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mutex) {
+    RecordCondWait(reinterpret_cast<u64>(cond));
     RecordGuestWait("pthread_cond_wait", reinterpret_cast<u64>(__builtin_return_address(0)),
                      reinterpret_cast<u64>(cond));
     PthreadCond* cvp{};
@@ -356,6 +357,7 @@ int PthreadCond::Broadcast() {
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_signal(PthreadCondT* cond) {
+    RecordCondSignal(reinterpret_cast<u64>(cond), false);
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     return cvp->Signal(nullptr);
@@ -368,6 +370,7 @@ int PS4_SYSV_ABI posix_pthread_cond_signalto_np(PthreadCondT* cond, Pthread* thr
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_broadcast(PthreadCondT* cond) {
+    RecordCondSignal(reinterpret_cast<u64>(cond), true);
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     cvp->Broadcast();

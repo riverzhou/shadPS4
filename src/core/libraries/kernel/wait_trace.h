@@ -22,6 +22,12 @@ void RecordSemaEvent(const char* kind, u32 handle, s32 count);
 /// was ever rejected because the count would have exceeded the maximum: a dropped signal leaves
 /// a waiter blocked forever even though the signaller believed it succeeded.
 void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_count);
+
+/// Track condition variable activity: how many threads wait on a condvar and when it was last
+/// signalled. A condvar with waiters but no recent signal is where a title hangs.
+void RecordCondWait(u64 cond);
+void RecordCondWaitDone(u64 cond);
+void RecordCondSignal(u64 cond, bool broadcast);
 void RecordSemaOverflow(u32 handle);
 
 /// Track which mutexes a guest thread currently holds. A thread that parks on a semaphore while
