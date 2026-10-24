@@ -348,6 +348,17 @@ s32 PthreadMutex::Unlock() {
      * Check if the running thread is not the owner of the mutex.
      */
     if (m_owner.load(std::memory_order_acquire) != curthread) [[unlikely]] {
+        // An unlock from a thread that does not own the mutex leaves the lock held forever, which
+        // looks exactly like a deadlock later. Report the mismatch with both thread names.
+        if (std::getenv("SHADPS4_FREEZE_DUMP") != nullptr ||
+            std::getenv("SHADPS4_TRACE_MUTEX_CONTENTION_MS") != nullptr) {
+            Pthread* owner = m_owner.load(std::memory_order_acquire);
+            LOG_WARNING(Kernel, "unlock by non-owner: mutex '{}' owner='{}' tid={} caller='{}' tid={}",
+                        name, owner != nullptr ? owner->name.c_str() : "(none)",
+                        owner != nullptr ? owner->tid.load() : -1,
+                        curthread != nullptr ? curthread->name.c_str() : "(none)",
+                        curthread != nullptr ? curthread->tid.load() : -1);
+        }
         return POSIX_EPERM;
     }
 

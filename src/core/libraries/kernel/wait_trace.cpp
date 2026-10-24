@@ -172,6 +172,36 @@ void RecordMutexReleased(u32 tid, u64 mutex) {
     }
 }
 
+namespace {
+struct SemaInfo {
+    std::string name;
+    s32 init_count;
+    s32 max_count;
+    u32 overflows;
+};
+std::map<u32, SemaInfo> g_sema_info;
+std::mutex g_sema_info_lock;
+} // namespace
+
+void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_count) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_sema_info_lock};
+    auto& info = g_sema_info[handle];
+    info.name = name != nullptr ? name : "?";
+    info.init_count = init_count;
+    info.max_count = max_count;
+}
+
+void RecordSemaOverflow(u32 handle) {
+    if (!g_enabled) {
+        return;
+    }
+    std::scoped_lock lk{g_sema_info_lock};
+    g_sema_info[handle].overflows++;
+}
+
 void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
     const u64 tick = static_cast<u64>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -234,6 +264,17 @@ void DumpGuestWaitRing() {
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
     std::string report = "=== freeze dump #" + std::to_string(index) + " ===" + nl;
 
+    {
+        std::scoped_lock info_lock{g_sema_info_lock};
+        for (const auto& [handle, info] : g_sema_info) {
+            LOG_INFO(Kernel, "  sema {} '{}' init={} max={} rejected_signals={}", handle, info.name,
+                     info.init_count, info.max_count, info.overflows);
+            report += std::string("  sema ") + std::to_string(handle) + " '" + info.name +
+                      "' init=" + std::to_string(info.init_count) + " max=" +
+                      std::to_string(info.max_count) + " rejected_signals=" +
+                      std::to_string(info.overflows) + nl;
+        }
+    }
     // Totals per handle answer what a ring cannot: was this semaphore ever signalled?
     for (std::size_t h = 0; h < MaxSemaHandles; ++h) {
         const u32 waits = g_sema_waits[h].load(std::memory_order_relaxed);

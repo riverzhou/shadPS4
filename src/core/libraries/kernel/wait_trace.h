@@ -18,6 +18,12 @@ void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 /// semaphore a frozen thread blocks on was ever signalled afterwards.
 void RecordSemaEvent(const char* kind, u32 handle, s32 count);
 
+/// Remember how a semaphore was created (name, initial and maximum count) and whether a signal
+/// was ever rejected because the count would have exceeded the maximum: a dropped signal leaves
+/// a waiter blocked forever even though the signaller believed it succeeded.
+void RecordSemaCreated(u32 handle, const char* name, s32 init_count, s32 max_count);
+void RecordSemaOverflow(u32 handle);
+
 /// Track which mutexes a guest thread currently holds. A thread that parks on a semaphore while
 /// still holding a lock is a deadlock in progress, and this makes that visible in the dump.
 void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra);

@@ -324,6 +324,7 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
     *sem = orbis_sems.Insert(initCount, maxCount, pName, attr == 1);
+    RecordSemaCreated(static_cast<u32>(sem->index), pName, initCount, maxCount);
     return ORBIS_OK;
 }
 
@@ -355,6 +356,7 @@ s32 PS4_SYSV_ABI sceKernelSignalSema(OrbisKernelSema sem, s32 signalCount) {
         return ORBIS_KERNEL_ERROR_ESRCH;
     }
     if (!orbis_sems[sem].Signal(signalCount)) {
+        RecordSemaOverflow(static_cast<u32>(sem.index));
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
     return ORBIS_OK;
