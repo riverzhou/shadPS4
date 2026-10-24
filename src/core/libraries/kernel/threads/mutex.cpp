@@ -98,6 +98,26 @@ static s32 InitStatic(Pthread* thread, PthreadMutexT* mutex) {
     return 0;
 }
 
+namespace {
+// SHADPS4_TRACE_MUTEX_NAME=<substring> reports where a named mutex was created or renamed, with
+// the guest address of its storage. The name is chosen by the title (or its libc), so this stays
+// generic: it answers "who created this lock and where does it live".
+void TraceMutexName(const char* what, const char* name, u64 guest_address, u64 object) {
+    static const char* needle = std::getenv("SHADPS4_TRACE_MUTEX_NAME");
+    if (needle == nullptr || needle[0] == 0 || name == nullptr) {
+        return;
+    }
+    if (std::string_view{name}.find(needle) == std::string_view::npos) {
+        return;
+    }
+    const auto* current = g_curthread;
+    LOG_INFO(Kernel, "named mutex {} '{}' guest={:#x} obj={:#x} by '{}' tid={} ra={:#x}", what,
+             name, guest_address, object, current != nullptr ? current->name.c_str() : "?",
+             current != nullptr ? current->tid.load() : 0,
+             reinterpret_cast<u64>(__builtin_return_address(0)));
+}
+} // namespace
+
 s32 PS4_SYSV_ABI posix_pthread_mutex_init(PthreadMutexT* mutex,
                                           const PthreadMutexAttrT* mutex_attr) {
     return MutexInit(mutex, mutex_attr ? *mutex_attr : nullptr, nullptr);
@@ -110,12 +130,15 @@ s32 PS4_SYSV_ABI posix_pthread_mutex_setname_np(PthreadMutexT* mutex, const char
     if (*mutex) {
         (*mutex)->name = name;
     }
+    TraceMutexName("setname", name, reinterpret_cast<u64>(mutex), reinterpret_cast<u64>(*mutex));
     return 0;
 }
 
 s32 PS4_SYSV_ABI scePthreadMutexInit(PthreadMutexT* mutex, const PthreadMutexAttrT* mutex_attr,
                                      const char* name) {
-    return MutexInit(mutex, mutex_attr ? *mutex_attr : nullptr, name);
+    const s32 result = MutexInit(mutex, mutex_attr ? *mutex_attr : nullptr, name);
+    TraceMutexName("init", name, reinterpret_cast<u64>(mutex), reinterpret_cast<u64>(*mutex));
+    return result;
 }
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_destroy(PthreadMutexT* mutex) {
@@ -364,8 +387,7 @@ void TraceMutexAccess(const char* what, PthreadMutexT* mutex, const char* name,
              reinterpret_cast<u64>(__builtin_return_address(0)), name != nullptr ? name : "?",
              owner != nullptr ? owner->name.c_str() : "(free)",
              owner != nullptr ? owner->tid.load() : -1);
-}
-} // namespace
+}} // namespace
 
 s32 PS4_SYSV_ABI posix_pthread_mutex_lock(PthreadMutexT* mutex) {
     CHECK_AND_INIT_MUTEX

@@ -503,10 +503,11 @@ void DumpGuestWaitRing() {
                          info.name, address, guest_address, info.owner_name, info.owner_tid,
                          owner_wait, info.waiter_ra, info.hits);
                 report += std::string("    '") + info.name + "' obj=" + std::to_string(address) +
-                          " owner='" + info.owner_name + "' tid=" +
-                          std::to_string(info.owner_tid) + " waiting on " + owner_wait +
-                          " (waiter ra=" + std::to_string(info.waiter_ra) + ", " +
-                          std::to_string(info.hits) + " hits)" + nl;
+                          " guest=" + std::to_string(guest_address) + " owner='" +
+                          info.owner_name + "' tid=" + std::to_string(info.owner_tid) +
+                          " waiting on " + owner_wait + " (waiter ra=" +
+                          std::to_string(info.waiter_ra) + ", " + std::to_string(info.hits) +
+                          " hits)" + nl;
             }
         }
     }
