@@ -315,6 +315,12 @@ void DumpGuestWaitRing() {
                     owner_wait = std::string(it->second.name) + " obj=" +
                                  std::to_string(it->second.obj);
                 }
+                if (info.hits >= 50) {
+                    LOG_WARNING(Kernel,
+                                "lock order inversion suspected: mutex '{}' is held by '{}' tid={} "
+                                "which is parked in {}, while other threads keep blocking on it",
+                                info.name, info.owner_name, info.owner_tid, owner_wait);
+                }
                 LOG_INFO(Kernel,
                          "    '{}' obj={:#x} owner='{}' tid={} waiting on {} (waiter ra={:#x}, {} "
                          "hits)",
