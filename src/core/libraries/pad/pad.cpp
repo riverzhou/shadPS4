@@ -462,6 +462,16 @@ int ProcessStates(OrbisPadData* pData, const Input::State* states, s32 num) {
 // the page it expects is really on screen.
 static void ApplyExternalPress(OrbisPadData* pData, int processed) {
     static const char* input_file = std::getenv("SHADPS4_AUTO_INPUT_FILE");
+    static const bool announced = [&] {
+        // One line at start-up so a run can be checked later: without this the channel being off
+        // looks exactly like a key that the title ignored.
+        if (input_file != nullptr) {
+            LOG_INFO(Lib_Pad, "external press channel: '{}'", input_file);
+        } else {
+            LOG_INFO(Lib_Pad, "external press channel is off (SHADPS4_AUTO_INPUT_FILE unset)");
+        }
+        return true;
+    }();
     if (input_file == nullptr || processed <= 0) {
         return;
     }
