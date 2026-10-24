@@ -214,6 +214,7 @@ void DumpGuestWaitRing() {
                       e.thread, e.tid, e.name, static_cast<unsigned long long>(e.guest_ra),
                       where.c_str(), static_cast<unsigned long long>(e.obj));
         report += line;
+    }
     WriteFreezeReport(report);
     // A late image dump has a resolved import GOT, so a PLT stub in a wait site can be mapped
     // back to the API it calls (the start-up dump happens before relocation).
