@@ -264,6 +264,37 @@ static void* RunThread(void* arg) {
     auto* curthread = static_cast<Pthread*>(arg);
     g_curthread = curthread;
     Common::SetCurrentThreadName(curthread->name.c_str());
+    // SHADPS4_TRACE_THREAD_PRIO=1 reports the guest scheduling parameters of every thread. They are
+    // not applied to the host thread yet, so a title that relies on priorities (or on priority
+    // inheritance) can deadlock; this shows what the title actually asks for.
+    static const bool trace_prio = std::getenv("SHADPS4_TRACE_THREAD_PRIO") != nullptr;
+    if (trace_prio) {
+        LOG_INFO(Kernel, "thread '{}' tid={} policy={} priority={} stack={:#x}", curthread->name,
+                 curthread->tid.load(), static_cast<int>(curthread->attr.sched_policy),
+                 curthread->attr.prio, curthread->attr.stacksize_attr);
+    }
+    // SHADPS4_THREAD_PRIORITY=1 applies the guest scheduling priority to the host thread. Orbis
+    // priorities run from 0 (highest) to 1023 (lowest) for the default policy; mapping them onto
+    // the five host levels keeps a worker thread from starving the thread that feeds it.
+    static const bool apply_prio = std::getenv("SHADPS4_THREAD_PRIORITY") != nullptr;
+#ifdef _WIN64
+    if (apply_prio) {
+        const int prio = curthread->attr.prio;
+        int host_prio = THREAD_PRIORITY_NORMAL;
+        if (prio <= 350) {
+            host_prio = THREAD_PRIORITY_HIGHEST;
+        } else if (prio <= 500) {
+            host_prio = THREAD_PRIORITY_ABOVE_NORMAL;
+        } else if (prio <= 700) {
+            host_prio = THREAD_PRIORITY_NORMAL;
+        } else if (prio <= 850) {
+            host_prio = THREAD_PRIORITY_BELOW_NORMAL;
+        } else {
+            host_prio = THREAD_PRIORITY_LOWEST;
+        }
+        SetThreadPriority(GetCurrentThread(), host_prio);
+    }
+#endif
     DebugState.AddCurrentThreadToGuestList();
     Core::InitializeTLS();
 
