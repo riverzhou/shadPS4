@@ -109,6 +109,12 @@ void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra) {
     if (!g_enabled) {
         return;
     }
+    if (name != nullptr && std::string_view{name} == "SceLibc_Mtx") {
+        static std::atomic<u32> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 20000) {
+            LOG_INFO(Kernel, "scemtx: acquire tid={} obj={:#x} ra={:#x}", tid, mutex, guest_ra);
+        }
+    }
     std::scoped_lock lk{g_held_mutex};
     g_held_mutexes[tid].push_back(HeldMutex{mutex, name, guest_ra});
 }
@@ -116,6 +122,12 @@ void RecordMutexAcquired(u32 tid, u64 mutex, const char* name, u64 guest_ra) {
 void RecordMutexReleased(u32 tid, u64 mutex) {
     if (!g_enabled) {
         return;
+    }
+    {
+        static std::atomic<u32> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 20000) {
+            LOG_INFO(Kernel, "scemtx: release tid={} obj={:#x}", tid, mutex);
+        }
     }
     std::scoped_lock lk{g_held_mutex};
     auto it = g_held_mutexes.find(tid);

@@ -305,6 +305,11 @@ s32 PthreadMutex::TryLock() {
     const s32 ret = m_lock.try_lock() ? 0 : POSIX_EBUSY;
     if (ret == 0) {
         m_owner.store(curthread, std::memory_order_release);
+        if (curthread != nullptr) {
+            RecordMutexAcquired(static_cast<u32>(curthread->tid.load()),
+                                reinterpret_cast<u64>(this), name.c_str(),
+                                reinterpret_cast<u64>(__builtin_return_address(0)));
+        }
     }
     return ret;
 }
