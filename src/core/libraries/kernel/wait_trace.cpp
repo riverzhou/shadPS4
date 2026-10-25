@@ -334,8 +334,11 @@ struct HleHistory {
 };
 
 thread_local HleHistory g_hle_history;
+// Registration is done once per thread; the recording itself only touches thread-local storage, so
+// the tracer does not add a global lock to every HLE call (which measurably slowed the title down).
 std::mutex g_hle_lock;
-std::map<u32, HleHistory> g_hle_by_tid;
+std::vector<std::pair<u32, HleHistory*>> g_hle_threads;
+thread_local bool g_hle_registered = false;
 } // namespace
 
 void RecordHleCallRet(const char* name, u64 ret) {
@@ -343,14 +346,8 @@ void RecordHleCallRet(const char* name, u64 ret) {
     if (!TraceHleEnabled()) {
         return;
     }
-    std::scoped_lock lk{g_hle_lock};
-    const auto* current = g_curthread;
-    if (current == nullptr) {
-        return;
-    }
-    const auto it = g_hle_by_tid.find(static_cast<u32>(current->tid.load()));
-    if (it != g_hle_by_tid.end() && it->second.next > 0) {
-        it->second.rets[(it->second.next - 1) % HleHistory::Depth] = ret;
+    if (g_hle_history.next > 0) {
+        g_hle_history.rets[(g_hle_history.next - 1) % HleHistory::Depth] = ret;
     }
 }
 
@@ -374,13 +371,14 @@ void RecordHleCall(const char* name) {
                                             std::chrono::steady_clock::now().time_since_epoch())
                                             .count());
     ++hist.next;
-    const auto* current = g_curthread;
-    if (current == nullptr) {
-        return;
-    }
-    std::scoped_lock lk{g_hle_lock};
-    if (g_hle_by_tid.size() < 400) {
-        g_hle_by_tid[static_cast<u32>(current->tid.load())] = hist;
+    if (!g_hle_registered) {
+        const auto* current = g_curthread;
+        if (current == nullptr) {
+            return;
+        }
+        g_hle_registered = true;
+        std::scoped_lock lk{g_hle_lock};
+        g_hle_threads.emplace_back(static_cast<u32>(current->tid.load()), &hist);
     }
 }
 
@@ -391,7 +389,8 @@ void DumpHleTail(const char* path) {
         return;
     }
     std::scoped_lock lk{g_hle_lock};
-    for (const auto& [tid, hist] : g_hle_by_tid) {
+    for (const auto& [tid, hist_ptr] : g_hle_threads) {
+        const HleHistory& hist = *hist_ptr;
         out << "tid=" << tid << nl;
         const std::size_t count = std::min<std::size_t>(hist.next, HleHistory::Depth);
         for (std::size_t i = 0; i < count; ++i) {
@@ -491,7 +490,8 @@ void DumpGuestWaitRing() {
     if (TraceHleEnabled()) {
         std::scoped_lock hle_lock{g_hle_lock};
         report += "  --- last HLE calls per thread ---" + nl;
-        for (const auto& [tid, hist] : g_hle_by_tid) {
+        for (const auto& [tid, hist_ptr] : g_hle_threads) {
+            const HleHistory& hist = *hist_ptr;
             std::string line = "  tid=" + std::to_string(tid) + " :";
             const std::size_t count = std::min<std::size_t>(hist.next, HleHistory::Depth);
             for (std::size_t i = 0; i < count; ++i) {
