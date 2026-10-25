@@ -242,7 +242,9 @@ int PS4_SYSV_ABI posix_pthread_cond_wait(PthreadCondT* cond, PthreadMutexT* mute
                      reinterpret_cast<u64>(cond));
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
-    return cvp->Wait(mutex, nullptr);
+    const int wait_result = cvp->Wait(mutex, nullptr);
+    ClearGuestWait();
+    return wait_result;
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_timedwait(PthreadCondT* cond, PthreadMutexT* mutex,

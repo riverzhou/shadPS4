@@ -388,8 +388,33 @@ void DumpHleTail(const char* path) {
     if (std::getenv("SHADPS4_DUMP_RIPS") != nullptr) {
         LogThreadRips();
     }
+    // Per-thread last wait: a stall dump then carries the exact object the title is parked on.
+    {
+        const std::string nl(1, static_cast<char>(10));
+        std::scoped_lock lk{g_ring_mutex};
+        out << "  --- last wait per thread ---" << nl;
+        for (const auto& [tid, e] : g_last_wait) {
+            out << "  tid=" << tid << " '" << e.thread << "' " << e.name << " obj=" << e.obj
+                << nl;
+        }
+    }
     out << DumpSemaSnapshot();
     LOG_INFO(Kernel, "HLE tail written to {}", path);
+}
+
+void ClearGuestWait() {
+    if (!g_enabled) {
+        return;
+    }
+    const auto* current = g_curthread;
+    if (current == nullptr) {
+        return;
+    }
+    std::scoped_lock lk{g_ring_mutex};
+    const auto it = g_last_wait.find(static_cast<u32>(current->tid.load()));
+    if (it != g_last_wait.end()) {
+        it->second.obj = 0;
+    }
 }
 
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {

@@ -16,6 +16,10 @@ namespace Libraries::Kernel {
 // can tell two different objects that share the same guest call site apart.
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 
+/// Clear the calling thread's recorded wait once it returns. Without this a thread that waited early
+/// in its life keeps that entry forever, and a stall dump then blames a wait that already finished.
+void ClearGuestWait();
+
 /// Remember the last few HLE calls of every thread. A frozen thread's last calls name the subsystem
 /// it was talking to right before it went to sleep, which is what a stall report needs. Enabled
 /// only when SHADPS4_TRACE_HLE is set; the recorded names are static strings, so this is cheap.
