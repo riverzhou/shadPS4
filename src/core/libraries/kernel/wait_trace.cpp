@@ -385,6 +385,7 @@ void DumpHleTail(const char* path) {
                 << std::string_view{hist.names[slot]}.substr(0, 120) << nl;
         }
     }
+    out << DumpSemaSnapshot();
     LOG_INFO(Kernel, "HLE tail written to {}", path);
 }
 

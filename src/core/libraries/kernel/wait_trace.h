@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "common/types.h"
 
 namespace Libraries::Kernel {
@@ -22,6 +24,10 @@ bool TraceHleEnabled();
 /// Write the recent HLE calls of every thread (name and timestamp) to a file. Used when an external
 /// script detects a stall: the tail names the work each thread did right before it stopped.
 void DumpHleTail(const char* path);
+
+/// Text snapshot of every live semaphore: token count and waiter count. A semaphore that holds
+/// tokens with nobody waiting is a signal that was delivered to nobody.
+std::string DumpSemaSnapshot();
 void RecordHleCall(const char* name);
 
 /// Keep the most recent semaphore wait/signal events so a wait dump can show whether the

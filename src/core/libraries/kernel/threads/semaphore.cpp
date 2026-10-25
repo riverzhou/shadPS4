@@ -183,6 +183,17 @@ public:
         return result;
     }
 
+    void Snapshot(std::string& out) const {
+        const s32 tokens = token_count;
+        const std::size_t waiters = wait_list.size();
+        out += "  sema '" + name + "' tokens=" + std::to_string(tokens) +
+               " waiters=" + std::to_string(waiters);
+        if (tokens > 0 && waiters == 0) {
+            out += "   <-- signalled with nobody waiting";
+        }
+        out += std::string(1, static_cast<char>(10));
+    }
+
     bool Signal(s32 signal_count) {
         std::scoped_lock lk{mutex};
         if (token_count + signal_count > max_count) {
@@ -317,6 +328,22 @@ using OrbisKernelSema = Common::SlotId;
 
 static Common::SlotVector<OrbisSem> orbis_sems;
 
+// Diagnostic registry: a stall dump lists every semaphore's token count, which shows whether a signal
+// was ever delivered while nobody was waiting.
+static std::mutex g_live_lock;
+static std::vector<OrbisSem*> g_live_sems;
+
+std::string DumpSemaSnapshot() {
+    std::scoped_lock lk{g_live_lock};
+    std::string out;
+    for (auto* sem : g_live_sems) {
+        if (sem != nullptr) {
+            sem->Snapshot(out);
+        }
+    }
+    return out;
+}
+
 s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u32 attr,
                                      s32 initCount, s32 maxCount, const void* pOptParam) {
     if (!pName || attr > 2 || initCount < 0 || maxCount <= 0 || initCount > maxCount) {
@@ -325,6 +352,10 @@ s32 PS4_SYSV_ABI sceKernelCreateSema(OrbisKernelSema* sem, const char* pName, u3
     }
     *sem = orbis_sems.Insert(initCount, maxCount, pName, attr == 1);
     RecordSemaCreated(static_cast<u32>(sem->index), pName, initCount, maxCount);
+    {
+        std::scoped_lock lk{g_live_lock};
+        g_live_sems.push_back(&orbis_sems[*sem]);
+    }
     return ORBIS_OK;
 }
 
