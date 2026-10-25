@@ -19,6 +19,9 @@ class SymbolsResolver;
 
 namespace Libraries::Kernel {
 
+/// Per-filter counts of triggered and consumed events, appended to stall dumps.
+std::string DumpEqueueStats();
+
 class EqueueInternal;
 struct EqueueEvent;
 

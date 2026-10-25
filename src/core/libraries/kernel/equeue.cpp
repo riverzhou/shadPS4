@@ -243,7 +243,29 @@ int EqueueInternal::WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKern
     return count;
 }
 
+std::atomic<u64> g_eq_triggered[32]{};
+std::atomic<u64> g_eq_consumed[32]{};
+
+std::string DumpEqueueStats() {
+    const std::string nl(1, static_cast<char>(10));
+    std::string out = "  --- event queue counters ---" + nl;
+    for (int i = 0; i < 32; ++i) {
+        const auto t = g_eq_triggered[i].load();
+        const auto c = g_eq_consumed[i].load();
+        if (t == 0 && c == 0) {
+            continue;
+        }
+        out += "  filter=" + std::to_string(i - 16) + " triggered=" + std::to_string(t) +
+               " consumed=" + std::to_string(c) + " outstanding=" + std::to_string(t - c) + nl;
+    }
+    return out;
+}
+
 bool EqueueInternal::TriggerEvent(u64 ident, s16 filter, void* trigger_data) {
+    // Filter ids are negative (User = -11, VideoOut = -13, ...), so shift them into range.
+    if (const int idx = filter + 16; idx >= 0 && idx < 32) {
+        g_eq_triggered[idx].fetch_add(1, std::memory_order_relaxed);
+    }
     bool has_found = false;
     {
         std::scoped_lock lock{m_mutex};
@@ -273,6 +295,9 @@ int EqueueInternal::GetTriggeredEvents(OrbisKernelEvent* ev, int num) {
         CheckIoEvent(*it);
 
         if (it->IsTriggered()) {
+            if (const int idx = it->event.filter + 16; idx >= 0 && idx < 32) {
+                g_eq_consumed[idx].fetch_add(1, std::memory_order_relaxed);
+            }
             ev[count++] = it->event;
             if (it->event.flags & OrbisKernelEvent::Flags::Clear) {
                 it->Clear();
