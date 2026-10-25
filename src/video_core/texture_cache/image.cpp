@@ -187,10 +187,11 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     constexpr auto tiling = vk::ImageTiling::eOptimal;
     const auto supported_format = instance.GetSupportedFormat(info.pixel_format, format_features);
+    vk::Format used_format = supported_format;
     const auto query_format = [&](vk::ImageCreateFlags query_flags,
                                   vk::ImageUsageFlags query_usage) {
         const vk::PhysicalDeviceImageFormatInfo2 format_info{
-            .format = supported_format,
+            .format = used_format,
             .type = ConvertImageType(info.type),
             .tiling = tiling,
             .usage = query_usage,
@@ -219,6 +220,35 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                         "image format {}: created with reduced flags {} usage {}",
                         vk::to_string(supported_format), vk::to_string(used_flags),
                         vk::to_string(used_usage));
+        } else {
+            // This driver refuses A2B10G10R10_SNORM outright; the same-size UNORM sibling is
+            // accepted (the scanout images use it) and eMutableFormat lets the views keep asking
+            // for SNORM, so substitute the format instead of handing the driver a combination
+            // it answers with an integer division by zero.
+            vk::Format substitute = supported_format;
+            switch (supported_format) {
+            case vk::Format::eA2B10G10R10SnormPack32:
+                substitute = vk::Format::eA2B10G10R10UnormPack32;
+                break;
+            case vk::Format::eB10G11R11UfloatPack32:
+                substitute = vk::Format::eR16G16B16A16Sfloat;
+                break;
+            default:
+                break;
+            }
+            if (substitute != supported_format) {
+                used_format = substitute;
+                image_format_properties = query_format(used_flags, used_usage);
+                if (image_format_properties.result != vk::Result::eSuccess) {
+                    used_flags = flags;
+                    used_usage = usage_flags;
+                    image_format_properties = query_format(used_flags, used_usage);
+                }
+                LOG_WARNING(Render_Vulkan,
+                            "image format {}: substituting {} (flags {} usage {})",
+                            vk::to_string(supported_format), vk::to_string(used_format),
+                            vk::to_string(used_flags), vk::to_string(used_usage));
+            }
         }
     }
     supported_samples = image_format_properties.result == vk::Result::eSuccess
@@ -228,7 +258,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     const vk::ImageCreateInfo image_ci = {
         .flags = used_flags,
         .imageType = ConvertImageType(info.type),
-        .format = supported_format,
+        .format = used_format,
         .extent{
             .width = info.size.width,
             .height = info.size.height,
@@ -246,7 +276,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     LOG_DEBUG(Render_Vulkan,
               "creating image {}x{}x{} {} format {} usage {} flags {} samples {}",
              info.size.width, info.size.height, info.size.depth,
-             vk::to_string(ConvertImageType(info.type)), vk::to_string(supported_format),
+             vk::to_string(ConvertImageType(info.type)), vk::to_string(used_format),
              vk::to_string(used_usage), vk::to_string(used_flags),
              vk::to_string(image_ci.samples));
     backing = &backing_images.emplace_back();
