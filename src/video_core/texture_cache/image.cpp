@@ -187,26 +187,46 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     constexpr auto tiling = vk::ImageTiling::eOptimal;
     const auto supported_format = instance.GetSupportedFormat(info.pixel_format, format_features);
-    const vk::PhysicalDeviceImageFormatInfo2 format_info{
-        .format = supported_format,
-        .type = ConvertImageType(info.type),
-        .tiling = tiling,
-        .usage = usage_flags,
-        .flags = flags,
+    const auto query_format = [&](vk::ImageCreateFlags query_flags,
+                                  vk::ImageUsageFlags query_usage) {
+        const vk::PhysicalDeviceImageFormatInfo2 format_info{
+            .format = supported_format,
+            .type = ConvertImageType(info.type),
+            .tiling = tiling,
+            .usage = query_usage,
+            .flags = query_flags,
+        };
+        return instance.GetPhysicalDevice().getImageFormatProperties2(format_info);
     };
-    const auto image_format_properties =
-        instance.GetPhysicalDevice().getImageFormatProperties2(format_info);
+
+    vk::ImageCreateFlags used_flags = flags;
+    vk::ImageUsageFlags used_usage = usage_flags;
+    auto image_format_properties = query_format(used_flags, used_usage);
     if (image_format_properties.result == vk::Result::eErrorFormatNotSupported) {
         LOG_ERROR(Render_Vulkan, "image format {} type {} is not supported (flags {}, usage {})",
-                  vk::to_string(supported_format), vk::to_string(format_info.type),
-                  vk::to_string(format_info.flags), vk::to_string(format_info.usage));
+                  vk::to_string(supported_format), vk::to_string(ConvertImageType(info.type)),
+                  vk::to_string(used_flags), vk::to_string(used_usage));
+        // GT7 asks for a mutable A2B10G10R10_SNORM image that also wants storage and the
+        // attachment-feedback-loop usage. The driver refuses that combination and creating it
+        // anyway faults (integer division by zero) inside the driver, so retry without the
+        // optional parts and keep whatever the driver does accept.
+        used_flags &= ~vk::ImageCreateFlagBits::eExtendedUsage;
+        used_usage &= ~(vk::ImageUsageFlagBits::eStorage |
+                        vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+        image_format_properties = query_format(used_flags, used_usage);
+        if (image_format_properties.result == vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan,
+                        "image format {}: created with reduced flags {} usage {}",
+                        vk::to_string(supported_format), vk::to_string(used_flags),
+                        vk::to_string(used_usage));
+        }
     }
     supported_samples = image_format_properties.result == vk::Result::eSuccess
                             ? image_format_properties.value.imageFormatProperties.sampleCounts
                             : vk::SampleCountFlagBits::e1;
 
     const vk::ImageCreateInfo image_ci = {
-        .flags = flags,
+        .flags = used_flags,
         .imageType = ConvertImageType(info.type),
         .format = supported_format,
         .extent{
@@ -218,15 +238,22 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         .arrayLayers = static_cast<u32>(info.resources.layers),
         .samples = LiverpoolToVK::NumSamples(info.num_samples, supported_samples),
         .tiling = tiling,
-        .usage = usage_flags,
+        .usage = used_usage,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
 
 
+    LOG_DEBUG(Render_Vulkan,
+              "creating image {}x{}x{} {} format {} usage {} flags {} samples {}",
+             info.size.width, info.size.height, info.size.depth,
+             vk::to_string(ConvertImageType(info.type)), vk::to_string(supported_format),
+             vk::to_string(used_usage), vk::to_string(used_flags),
+             vk::to_string(image_ci.samples));
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
     backing->image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
     backing->image.Create(image_ci);
+    LOG_DEBUG(Render_Vulkan, "image created");
 
     Vulkan::SetObjectName(instance.GetDevice(), GetImage(),
                           "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{}", info.size.width,
