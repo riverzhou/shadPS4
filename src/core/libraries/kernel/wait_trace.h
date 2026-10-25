@@ -14,6 +14,12 @@ namespace Libraries::Kernel {
 // can tell two different objects that share the same guest call site apart.
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 
+/// Remember the last few HLE calls of every thread. A frozen thread's last calls name the subsystem
+/// it was talking to right before it went to sleep, which is what a stall report needs. Enabled
+/// only when SHADPS4_TRACE_HLE is set; the recorded names are static strings, so this is cheap.
+bool TraceHleEnabled();
+void RecordHleCall(const char* name);
+
 /// Keep the most recent semaphore wait/signal events so a wait dump can show whether the
 /// semaphore a frozen thread blocks on was ever signalled afterwards.
 void RecordSemaEvent(const char* kind, u32 handle, s32 count);

@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include "common/types.h"
+#include "core/libraries/kernel/wait_trace.h"
 #ifdef _WIN32
 #include <malloc.h>
 #endif
@@ -53,6 +54,9 @@ struct HostCallWrapperImpl;
 template <class ReturnType, class... Args, PS4_SYSV_ABI ReturnType (*func)(Args...)>
 struct HostCallWrapperImpl<func> {
     static ReturnType PS4_SYSV_ABI wrap(Args... args) {
+        if (Libraries::Kernel::TraceHleEnabled()) {
+            Libraries::Kernel::RecordHleCall(__PRETTY_FUNCTION__);
+        }
         return func(args...);
     }
 };

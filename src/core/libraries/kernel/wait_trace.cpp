@@ -317,6 +317,48 @@ void RecordSemaEvent(const char* kind, u32 handle, s32 count) {
     }
 }
 
+bool TraceHleEnabled() {
+    static const bool enabled = std::getenv("SHADPS4_TRACE_HLE") != nullptr;
+    return enabled;
+}
+
+namespace {
+struct HleHistory {
+    static constexpr std::size_t Depth = 16;
+    const char* names[Depth]{};
+    std::size_t next = 0;
+};
+
+thread_local HleHistory g_hle_history;
+std::mutex g_hle_lock;
+std::map<u32, HleHistory> g_hle_by_tid;
+} // namespace
+
+void RecordHleCall(const char* name) {
+    if (!TraceHleEnabled()) {
+        return;
+    }
+    // The guest calls mutex lock/unlock on every iteration of its loops; recording those would
+    // push everything else out of the ring, and they are already covered by the wait trace.
+    // Kernel synchronisation dominates every loop and already has its own trace; what a stall
+    // report needs is the non-kernel work a thread was doing last, so only those are kept.
+    const std::string_view pretty{name};
+    if (pretty.find("Libraries::Kernel::") != std::string_view::npos) {
+        return;
+    }
+    auto& hist = g_hle_history;
+    hist.names[hist.next % HleHistory::Depth] = name;
+    ++hist.next;
+    const auto* current = g_curthread;
+    if (current == nullptr) {
+        return;
+    }
+    std::scoped_lock lk{g_hle_lock};
+    if (g_hle_by_tid.size() < 400) {
+        g_hle_by_tid[static_cast<u32>(current->tid.load())] = hist;
+    }
+}
+
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
     if (!g_enabled) {
         return;
@@ -364,6 +406,34 @@ void DumpGuestWaitRing() {
     const std::string nl(1, static_cast<char>(10));
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
     std::string report = "=== freeze dump #" + std::to_string(index) + " ===" + nl;
+
+    // What each waiting thread called right before it went to sleep. A stall is almost always a
+    // call that never came back, so the tail of this history names the subsystem.
+    if (TraceHleEnabled()) {
+        std::scoped_lock hle_lock{g_hle_lock};
+        report += "  --- last HLE calls per thread ---" + nl;
+        for (const auto& [tid, hist] : g_hle_by_tid) {
+            std::string line = "  tid=" + std::to_string(tid) + " :";
+            const std::size_t count = std::min<std::size_t>(hist.next, HleHistory::Depth);
+            for (std::size_t i = 0; i < count; ++i) {
+                const std::size_t slot = (hist.next - count + i) % HleHistory::Depth;
+                const char* name = hist.names[slot];
+                if (name == nullptr) {
+                    continue;
+                }
+                std::string_view pretty{name};
+                // __PRETTY_FUNCTION__ looks like "... wrap(Args...) [ReturnType (*func)(Args...)]";
+                // keep the bracketed part, which carries the HLE function name.
+                const auto open = pretty.find('[');
+                const auto close = pretty.rfind(']');
+                if (open != std::string_view::npos && close != std::string_view::npos && close > open) {
+                    pretty = pretty.substr(open + 1, close - open - 1);
+                }
+                line += " " + std::string(pretty);
+            }
+            report += line + nl;
+        }
+    }
 
     {
         std::scoped_lock info_lock{g_sema_info_lock};
