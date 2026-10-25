@@ -125,14 +125,15 @@ public:
         }
     }
 
+    // The arena is only rewound between idle stretches, so it has to absorb every submission of
+    // a long uninterrupted stretch: GT7's scene loads burned through 32 MiB in seconds.
+    static constexpr size_t GfxArenaWords = 512_MB >> 2;
+
     void ReserveCopyBufferSpace() {
         GpuQueue& gfx_queue = mapped_queues[GfxQueueId];
         std::scoped_lock lk(gfx_queue.m_access);
-        // The arena is only rewound when no submission is in flight, so it has to absorb every
-        // submission of a long uninterrupted stretch; 32 MiB keeps that from ever overflowing.
-        constexpr size_t GfxReservedSize = 32_MB >> 2;
-        gfx_queue.ccb_buffer.reserve(GfxReservedSize);
-        gfx_queue.dcb_buffer.reserve(GfxReservedSize);
+        gfx_queue.ccb_buffer.reserve(GfxArenaWords);
+        gfx_queue.dcb_buffer.reserve(GfxArenaWords);
     }
 
     inline ComputeProgram& GetCsRegs() {

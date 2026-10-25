@@ -4,6 +4,8 @@
 #include <boost/preprocessor/stringize.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <cstdlib>
 
 #include "common/assert.h"
@@ -1240,10 +1242,24 @@ void Liverpool::HandleGetLodStats(const PM4CmdGetLodStats* get_lod) {
 Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
     // Caller (SubmitGfx) holds submit_mutex, which serializes this with SubmitDone resets.
+    if (queue.dcb_buffer.capacity() == 0 || queue.ccb_buffer.capacity() == 0) {
+        // The delayed switch (SHADPS4_COPY_BUFFERS_DELAY_MS) can turn copying on after the title
+        // booted with the flag off, and then gnmdriver never reserved the arena.
+        queue.dcb_buffer.reserve(GfxArenaWords);
+        queue.ccb_buffer.reserve(GfxArenaWords);
+    }
+    // Reclaim the arena here as well as in SubmitDone: during a scene load the GPU thread never
+    // drains completely, so SubmitDone alone would let the offsets run away.
+    if (num_submits == 0 && arena_refs == 0) {
+        queue.dcb_buffer_offset = 0;
+        queue.ccb_buffer_offset = 0;
+    }
     ASSERT_MSG(queue.dcb_buffer.capacity() >= queue.dcb_buffer_offset + dcb.size(),
-               "dcb copy buffer out of reserved space");
+               "dcb copy buffer out of reserved space (offset={} size={} capacity={})",
+               queue.dcb_buffer_offset.load(), dcb.size(), queue.dcb_buffer.capacity());
     ASSERT_MSG(queue.ccb_buffer.capacity() >= queue.ccb_buffer_offset + ccb.size(),
-               "ccb copy buffer out of reserved space");
+               "ccb copy buffer out of reserved space (offset={} size={} capacity={})",
+               queue.ccb_buffer_offset.load(), ccb.size(), queue.ccb_buffer.capacity());
 
     queue.dcb_buffer.resize(
         std::max(queue.dcb_buffer.size(), queue.dcb_buffer_offset + dcb.size()));
@@ -1271,12 +1287,53 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
     return std::make_pair(dcb, ccb);
 }
 
+namespace {
+// Debug switch for GT7: the title's start-up wizard freezes far more often when the command
+// stream is copied (the copy costs latency, and the guest is sensitive to it), while the race
+// then needs the copy because it reuses command buffers under the GPU thread's feet.
+// SHADPS4_COPY_BUFFERS_DELAY_MS=<ms> keeps the copy off for the first <ms> and turns it on
+// afterwards, which covers the wizard and still protects the races. Unset = plain setting.
+bool CopyBuffersEnabled() {
+    // File switch first: the driver creates this file when the wizard finishes, which is exactly
+    // when the copy path becomes safe and necessary.
+    static const char* file = std::getenv("SHADPS4_COPY_BUFFERS_FILE");
+    if (file != nullptr && file[0] != 0) {
+        static std::atomic<s64> next_check{0};
+        static std::atomic<bool> on{false};
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+        if (now_ms >= next_check.load(std::memory_order_relaxed)) {
+            next_check.store(now_ms + 200, std::memory_order_relaxed);
+            std::error_code ec;
+            on.store(std::filesystem::exists(file, ec), std::memory_order_relaxed);
+        }
+        if (on.load(std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+    // Time fallback for hand-driven runs, which have no driver to create the file.
+    static const u64 delay_ms = [] {
+        const char* env = std::getenv("SHADPS4_COPY_BUFFERS_DELAY_MS");
+        return env != nullptr ? std::strtoull(env, nullptr, 10) : 0ull;
+    }();
+    if (delay_ms != 0) {
+        static const auto start = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - start)
+                                 .count();
+        return static_cast<u64>(elapsed) >= delay_ms;
+    }
+    return EmulatorSettings.IsCopyGpuBuffers();
+}
+} // namespace
+
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
     // Copy first, under the submit lock, and pin the arena until the submission is accounted
     // for: SubmitDone may only rewind the arena when num_submits and the pin are both zero.
-    const bool copy = EmulatorSettings.IsCopyGpuBuffers();
+    const bool copy = CopyBuffersEnabled();
     if (copy) {
         std::scoped_lock lk{submit_mutex};
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
