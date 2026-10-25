@@ -34,6 +34,10 @@ void DumpHleTail(const char* path);
 std::string DumpSemaSnapshot();
 void RecordHleCall(const char* name);
 
+/// Same, but also keeps the call's return value (converted to a plain integer). Two runs that take
+/// different branches can then be compared by the values their HLE calls returned.
+void RecordHleCallRet(const char* name, u64 ret);
+
 /// Keep the most recent semaphore wait/signal events so a wait dump can show whether the
 /// semaphore a frozen thread blocks on was ever signalled afterwards.
 void RecordSemaEvent(const char* kind, u32 handle, s32 count);

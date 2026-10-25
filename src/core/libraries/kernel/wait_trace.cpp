@@ -329,6 +329,7 @@ struct HleHistory {
     static constexpr std::size_t Depth = 16;
     const char* names[Depth]{};
     u64 times[Depth]{};
+    u64 rets[Depth]{};
     std::size_t next = 0;
 };
 
@@ -336,6 +337,22 @@ thread_local HleHistory g_hle_history;
 std::mutex g_hle_lock;
 std::map<u32, HleHistory> g_hle_by_tid;
 } // namespace
+
+void RecordHleCallRet(const char* name, u64 ret) {
+    RecordHleCall(name);
+    if (!TraceHleEnabled()) {
+        return;
+    }
+    std::scoped_lock lk{g_hle_lock};
+    const auto* current = g_curthread;
+    if (current == nullptr) {
+        return;
+    }
+    const auto it = g_hle_by_tid.find(static_cast<u32>(current->tid.load()));
+    if (it != g_hle_by_tid.end() && it->second.next > 0) {
+        it->second.rets[(it->second.next - 1) % HleHistory::Depth] = ret;
+    }
+}
 
 void RecordHleCall(const char* name) {
     if (!TraceHleEnabled()) {
@@ -382,7 +399,7 @@ void DumpHleTail(const char* path) {
             if (hist.names[slot] == nullptr) {
                 continue;
             }
-            out << "  " << hist.times[slot] << " "
+            out << "  " << hist.times[slot] << " ret=" << hist.rets[slot] << " "
                 << std::string_view{hist.names[slot]}.substr(0, 120) << nl;
         }
     }
