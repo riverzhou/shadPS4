@@ -226,7 +226,9 @@ int PS4_SYSV_ABI scePadGetDeviceInfo() {
 
 int PS4_SYSV_ABI scePadGetExtControllerInformation(s32 handle,
                                                    OrbisPadExtendedControllerInformation* pInfo) {
-    LOG_INFO(Lib_Pad, "called handle = {}", handle);
+    // Called thousands of times per second by the title's update thread; logging this at info level
+    // costs a formatting and a disk write per poll.
+    LOG_DEBUG(Lib_Pad, "called handle = {}", handle);
     std::memset(pInfo, 0, sizeof(OrbisPadExtendedControllerInformation));
     return scePadGetControllerInformation(handle, &pInfo->base);
 }
