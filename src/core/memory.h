@@ -302,6 +302,12 @@ public:
 
     void NameVirtualRange(VAddr virtual_addr, u64 size, std::string_view name);
 
+    /// Debug-only: write every mapped, CPU-readable guest region (smaller than 512 MB) to `dir`
+    /// with a manifest of base/size/protection/type/name. The title loads part of its own code
+    /// from its data archive, so those pages are never a Module and cannot be recovered with
+    /// SHADPS4_DUMP_MODULE_DIR alone; this is the only way to disassemble the menu.
+    void DumpGuestMemory(std::string_view dir, u64 max_total_bytes);
+
     s32 GetMemoryPoolStats(::Libraries::Kernel::OrbisKernelMemoryPoolBlockStats* stats);
 
     void InvalidateMemory(VAddr addr, u64 size) const;

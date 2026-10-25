@@ -23,5 +23,11 @@ void LogThreadRips();
 /// the module) from a host wait (one address in a system DLL). No-op when the variable is unset.
 void StartThreadRipSampler();
 
+/// Start the timer configured with SHADPS4_DUMP_GUEST_MEM=<seconds>. When it expires every
+/// mapped, CPU-readable guest region is written under user/guest_mem (capped by
+/// SHADPS4_DUMP_GUEST_MEM_MAX_MB, default 2048) with a manifest. Needed for code the title loads
+/// from its own archive: it never becomes a Module, so SHADPS4_DUMP_MODULE_DIR cannot see it.
+void StartGuestMemoryDumpTimer();
+
 } // namespace Libraries::Kernel
 

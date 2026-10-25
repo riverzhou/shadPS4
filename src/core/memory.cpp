@@ -14,6 +14,10 @@
 #include "core/memory.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace Core {
 
 MemoryManager::MemoryManager() {
@@ -1396,6 +1400,92 @@ void MemoryManager::NameVirtualRange(VAddr virtual_addr, u64 size, std::string_v
             it++;
         }
     }
+}
+
+void MemoryManager::DumpGuestMemory(std::string_view dir, u64 max_total_bytes) {
+    struct Region {
+        VAddr base;
+        u64 size;
+        u32 prot;
+        u32 type;
+        std::string name;
+    };
+    std::vector<Region> regions;
+    {
+        // Snapshot under the lock and write the files afterwards: holding the VMA mutex while
+        // writing hundreds of megabytes would stall the GPU thread for the whole dump.
+        std::scoped_lock lk{mutex, unmap_mutex};
+        for (const auto& [addr, vma] : vma_map) {
+            if (!vma.IsMapped() || vma.size == 0) {
+                continue;
+            }
+            if (vma.size > 1024_MB) {
+                LOG_INFO(Kernel_Vmm, "guest memory dump: skipping {:#x} ({} MB, {})", vma.base,
+                         vma.size >> 20, vma.name);
+                continue;
+            }
+            const bool readable = (vma.prot & MemoryProt::CpuRead) != MemoryProt::NoAccess;
+            const bool executable = (vma.prot & MemoryProt::CpuExec) != MemoryProt::NoAccess;
+            if (!readable && !executable) {
+                if (vma.size >= 1_MB) {
+                    LOG_INFO(Kernel_Vmm,
+                             "guest memory dump: skipping unreadable {:#x} ({} MB, prot={})",
+                             vma.base, vma.size >> 20, std::to_underlying(vma.prot));
+                }
+                continue;
+            }
+            regions.push_back(Region{vma.base, vma.size, std::to_underlying(vma.prot),
+                                     std::to_underlying(vma.type), vma.name});
+        }
+    }
+
+    const std::filesystem::path out_dir{dir};
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+    if (ec) {
+        LOG_ERROR(Kernel_Vmm, "guest memory dump: cannot create {}: {}", out_dir.string(),
+                  ec.message());
+        return;
+    }
+    Common::FS::IOFile manifest{out_dir / "manifest.txt", Common::FS::FileAccessMode::Create,
+                                Common::FS::FileType::TextFile};
+    u64 total = 0;
+    u32 written = 0;
+    for (const auto& region : regions) {
+        if (total + region.size > max_total_bytes) {
+            LOG_INFO(Kernel_Vmm, "guest memory dump: size cap reached at {} MB", total >> 20);
+            break;
+        }
+        const auto name = fmt::format("{:016x}_{:x}.bin", region.base, region.size);
+        Common::FS::IOFile file{out_dir / name, Common::FS::FileAccessMode::Create,
+                                Common::FS::FileType::BinaryFile};
+        if (!file.IsOpen()) {
+            continue;
+        }
+        bool ok = true;
+#ifdef _WIN32
+        __try {
+            file.WriteRaw<u8>(reinterpret_cast<const u8*>(region.base), region.size);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            ok = false;
+        }
+#else
+        file.WriteRaw<u8>(reinterpret_cast<const u8*>(region.base), region.size);
+#endif
+        if (!ok) {
+            LOG_WARNING(Kernel_Vmm, "guest memory dump: {} at {:#x} was not fully readable", name,
+                        region.base);
+            continue;
+        }
+        const auto line = fmt::format("base={:#x} size={:#x} prot={} type={} name={} file={}\n",
+                                      region.base, region.size, region.prot, region.type,
+                                      region.name, name);
+        manifest.WriteString(std::span{line.data(), line.size()});
+        total += region.size;
+        ++written;
+    }
+    LOG_INFO(Kernel_Vmm, "guest memory dump: {} regions, {} MB to {}", written, total >> 20,
+             out_dir.string());
 }
 
 s32 MemoryManager::GetDirectMemoryType(PAddr addr, s32* directMemoryTypeOut,

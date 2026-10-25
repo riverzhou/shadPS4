@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "common/logging/log.h"
+#include "core/memory.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/threads/thread_state.h"
 
@@ -277,6 +278,29 @@ void StartGuestStackDumpTimer() {
             }
         }}.detach();
         LOG_INFO(Kernel, "guest stack dump scheduled at {} points", times.size());
+    });
+}
+
+void StartGuestMemoryDumpTimer() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* env = std::getenv("SHADPS4_DUMP_GUEST_MEM");
+        if (env == nullptr) {
+            return;
+        }
+        const u64 seconds = std::strtoull(env, nullptr, 10);
+        if (seconds == 0) {
+            return;
+        }
+        const u64 max_mb = [] {
+            const char* cap = std::getenv("SHADPS4_DUMP_GUEST_MEM_MAX_MB");
+            return cap != nullptr ? std::strtoull(cap, nullptr, 10) : 2048ull;
+        }();
+        std::thread{[seconds, max_mb] {
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+            Core::Memory::Instance()->DumpGuestMemory("user/guest_mem", max_mb << 20);
+        }}.detach();
+        LOG_INFO(Kernel, "guest memory dump scheduled in {} s (cap {} MB)", seconds, max_mb);
     });
 }
 

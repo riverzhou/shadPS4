@@ -11,6 +11,7 @@ namespace Libraries::Kernel {
 
 void RegisterThreads(Core::Loader::SymbolsResolver* sym) {
     StartGuestStackDumpTimer();
+    StartGuestMemoryDumpTimer();
     StartWaitRingDumpTimer();
     StartThreadRipSampler();
     RegisterBarrier(sym);
