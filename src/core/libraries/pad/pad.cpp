@@ -915,6 +915,26 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                      handle, num, std::to_underlying(pData[0].buttons), pData[0].connected);
         }
     }
+    if (std::getenv("SHADPS4_PAD_STATS") != nullptr) {
+        // Count what each handle actually receives: a press that never lands on the handle the
+        // title reads is invisible to it, however many times the emulator applied it.
+        static std::atomic<u32> reads[16]{};
+        static std::atomic<u32> pressed[16]{};
+        static std::atomic<u32> tick{};
+        const int slot = handle & 15;
+        reads[slot].fetch_add(1, std::memory_order_relaxed);
+        if (std::to_underlying(pData[0].buttons) != 0) {
+            pressed[slot].fetch_add(1, std::memory_order_relaxed);
+        }
+        if (tick.fetch_add(1, std::memory_order_relaxed) % 4000 == 0) {
+            for (int i = 0; i < 16; ++i) {
+                if (reads[i].load() != 0) {
+                    LOG_INFO(Lib_Pad, "pad stats handle={} reads={} pressed={}", i,
+                             reads[i].load(), pressed[i].load());
+                }
+            }
+        }
+    }
     return processed;
 }
 
