@@ -776,9 +776,11 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             return true;
         }();
         static u32 file_button = 0;
+        static u32 file_stick = 0;
         static u64 file_button_until = 0;
         if (input_file != nullptr && ms >= file_button_until) {
             file_button = 0;
+            file_stick = 0;
             if (std::ifstream file{input_file}; file) {
                 std::string name;
                 std::getline(file, name);
@@ -817,8 +819,16 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::R1);
                 } else if (name == "touchpad") {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::TouchPad);
+                } else if (name == "lstick_left") {
+                    file_stick = 1;
+                } else if (name == "lstick_right") {
+                    file_stick = 2;
+                } else if (name == "lstick_up") {
+                    file_stick = 3;
+                } else if (name == "lstick_down") {
+                    file_stick = 4;
                 }
-                if (file_button != 0) {
+                if (file_button != 0 || file_stick != 0) {
                     static const u64 default_hold_ms = [] {
                         const char* env = std::getenv("SHADPS4_AUTO_PRESS_HOLD_MS");
                         return env != nullptr ? std::strtoull(env, nullptr, 10) : 1200ull;
@@ -838,6 +848,17 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         }
         static const bool settings_adjust =
             std::getenv("SHADPS4_AUTO_SETTINGS_ADJUST") != nullptr;
+        if (file_stick != 0) {
+            // Stick deflection on the external channel: several title menus move the cursor with
+            // the left stick while the d-pad only scrolls lists.
+            switch (file_stick) {
+            case 1: pData[0].leftStick.x = 0; break;
+            case 2: pData[0].leftStick.x = 255; break;
+            case 3: pData[0].leftStick.y = 0; break;
+            case 4: pData[0].leftStick.y = 255; break;
+            default: break;
+            }
+        }
         if (file_button != 0) {
             pData[0].buttons = pData[0].buttons |
                               static_cast<OrbisPadButtonDataOffset>(file_button);
