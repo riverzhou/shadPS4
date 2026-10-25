@@ -541,6 +541,22 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             pad_log_prev = cur;
         }
     }
+    // A frame counter for the tools: the title polls the pad about once per rendered frame, and
+    // at one frame per second a wall-clock script drifts out of step with the pages. Recording
+    // and replaying the counter instead of the clock keeps the presses on the same frames.
+    if (processed > 0) {
+        static const char* counter_file = std::getenv("SHADPS4_PAD_COUNTER_FILE");
+        static u64 pad_frame = 0;
+        static u64 pad_frame_ms = 0;
+        const u64 now_ms = static_cast<u64>(SDL_GetTicks());
+        if (counter_file != nullptr && (pad_frame_ms == 0 || now_ms - pad_frame_ms >= 50)) {
+            ++pad_frame;
+            pad_frame_ms = now_ms;
+            std::ofstream out{counter_file, std::ios::trunc};
+            out << pad_frame;
+        }
+    }
+
     // The external input file is a separate channel: it must work even when the automatic
     // confirm cadence is off, so a script can drive menus with hand-timed presses only.
     static const bool input_file_enabled = std::getenv("SHADPS4_AUTO_INPUT_FILE") != nullptr;
@@ -727,6 +743,14 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                 while (!name.empty() && (name.back() == 13 || name.back() == ' ')) {
                     name.pop_back();
                 }
+                // A key may carry its own hold ("cross@1500"): the start-up screens only need a
+                // short press, while the post-wizard screens run at one frame per second and need
+                // the button held across a whole frame or the title never samples it.
+                u64 press_hold_ms = 0;
+                if (const auto at = name.find('@'); at != std::string::npos) {
+                    press_hold_ms = std::strtoull(name.c_str() + at + 1, nullptr, 10);
+                    name.resize(at);
+                }
                 if (name == "cross") {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::Cross);
                 } else if (name == "circle") {
@@ -743,14 +767,12 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::Right);
                 }
                 if (file_button != 0) {
-                    LOG_INFO(Lib_Pad, "auto input: external press '{}'", name);
-                    // The title samples the pad about twice per second while it loads, so a hold
-                    // shorter than a frame interval is silently lost. Hold long enough to span
-                    // several samples.
-                    static const u64 hold_ms = [] {
+                    static const u64 default_hold_ms = [] {
                         const char* env = std::getenv("SHADPS4_AUTO_PRESS_HOLD_MS");
                         return env != nullptr ? std::strtoull(env, nullptr, 10) : 1200ull;
                     }();
+                    const u64 hold_ms = press_hold_ms != 0 ? press_hold_ms : default_hold_ms;
+                    LOG_INFO(Lib_Pad, "auto input: external press '{}' for {} ms", name, hold_ms);
                     file_button_until = ms + hold_ms;
                 }
                 std::error_code remove_ec;

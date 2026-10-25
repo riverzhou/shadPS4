@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <fstream>
+
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
@@ -168,6 +171,17 @@ u64 LastFlipMs() {
 
 s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode, s64 flipArg) {
     g_last_flip_ms.store(NowMs(), std::memory_order_relaxed);
+    // Count presented frames for the tools: at one frame per second a wall-clock script drifts
+    // against the title's pages, while replaying by presented frames stays in step.
+    {
+        static const char* frame_file = std::getenv("SHADPS4_FRAME_COUNTER_FILE");
+        static u64 frame_index = 0;
+        if (frame_file != nullptr) {
+            ++frame_index;
+            std::ofstream out{frame_file, std::ios::trunc};
+            out << frame_index;
+        }
+    }
     auto* port = driver->GetPort(handle);
     if (!port) {
         LOG_ERROR(Lib_VideoOut, "Invalid handle = {}", handle);
