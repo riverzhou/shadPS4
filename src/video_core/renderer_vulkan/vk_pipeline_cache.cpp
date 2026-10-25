@@ -357,6 +357,21 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
 
+        // Debug-only: the GPU trace identifies a draw by its pipeline pointer, which is useless
+        // once the process is gone. Print the pointer next to the shader hashes it was built from
+        // so a draw that hangs the GPU can be traced back to its programs.
+        if (std::getenv("SHADPS4_LOG_PIPELINE_HANDLES") != nullptr) {
+            std::string stages;
+            for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
+                if (infos[stage]) {
+                    stages += fmt::format(" {}={:#x}", u32(infos[stage]->hw_stage),
+                                          u64{infos[stage]->pgm_hash});
+                }
+            }
+            LOG_INFO(Render_Vulkan, "Graphics pipeline handle={:#x} hash={:#x} stages:{}",
+                     reinterpret_cast<u64>(it.value().get()), pipeline_hash, stages);
+        }
+
         if (EmulatorSettings.IsShaderCollect()) {
             for (auto stage = 0; stage < MaxShaderStages; ++stage) {
                 if (infos[stage]) {
@@ -384,6 +399,12 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+
+        if (std::getenv("SHADPS4_LOG_PIPELINE_HANDLES") != nullptr) {
+            LOG_INFO(Render_Vulkan, "Compute pipeline handle={:#x} hash={:#x} cs={:#x}",
+                     reinterpret_cast<u64>(it.value().get()), pipeline_hash,
+                     u64{infos[0] ? infos[0]->pgm_hash : 0});
+        }
 
         if (EmulatorSettings.IsShaderCollect()) {
             auto& m = modules[0];
