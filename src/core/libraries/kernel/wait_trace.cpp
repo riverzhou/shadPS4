@@ -343,7 +343,8 @@ void RecordHleCall(const char* name) {
     // Kernel synchronisation dominates every loop and already has its own trace; what a stall
     // report needs is the non-kernel work a thread was doing last, so only those are kept.
     const std::string_view pretty{name};
-    if (pretty.find("Libraries::Kernel::") != std::string_view::npos) {
+    if (pretty.find("Libraries::Kernel::") != std::string_view::npos ||
+        pretty.find("Libraries::Pad::") != std::string_view::npos) {
         return;
     }
     auto& hist = g_hle_history;
