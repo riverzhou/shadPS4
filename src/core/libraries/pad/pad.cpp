@@ -811,6 +811,12 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::R2);
                 } else if (name == "l2") {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::L2);
+                } else if (name == "l1") {
+                    file_button = static_cast<u32>(OrbisPadButtonDataOffset::L1);
+                } else if (name == "r1") {
+                    file_button = static_cast<u32>(OrbisPadButtonDataOffset::R1);
+                } else if (name == "touchpad") {
+                    file_button = static_cast<u32>(OrbisPadButtonDataOffset::TouchPad);
                 }
                 if (file_button != 0) {
                     static const u64 default_hold_ms = [] {
