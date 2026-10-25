@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <unordered_set>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -521,6 +522,13 @@ std::unique_ptr<IFile> MntPoints::Open(std::string_view guest_path, bool writabl
 
 std::unique_ptr<IFile> MntPoints::Open(std::string_view guest_path,
                                        Common::FS::FileAccessMode mode) {
+    // Anything the title opens for writing is a candidate for "where does this state actually
+    // live". Reads are far too numerous to log, writes are rare - printing them once each is
+    // enough to see, for example, that a profile write never happens at all.
+    static const bool trace_writes = std::getenv("SHADPS4_TRACE_WRITES") != nullptr;
+    if (trace_writes && mode != Common::FS::FileAccessMode::Read) {
+        LOG_INFO(Kernel_Fs, "write open: '{}' mode={}", guest_path, static_cast<int>(mode));
+    }
     const auto corrected = SanitizeGuestPath(guest_path);
     if (!corrected || *corrected == "/") {
         return nullptr;
