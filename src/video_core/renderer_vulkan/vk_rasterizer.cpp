@@ -984,8 +984,15 @@ bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             if (vsharp.base_address == 0 || vsharp.GetSize() == 0 ||
                 vsharp.GetSize() >= 0x80000000ULL) {
                 if (vsharp.GetSize() >= 0x80000000ULL) {
-                    LOG_WARNING(Render, "GT7: rejecting huge buffer size {:#x} addr={:#x}",
-                                vsharp.GetSize(), vsharp.base_address);
+                    // Fire-and-forget per draw: at 1 fps this alone filled the 100 MB log and
+                    // truncated the tail we needed. Keep the shape, drop the flood.
+                    static std::atomic<u32> huge_buf_count{0};
+                    const u32 n = huge_buf_count.fetch_add(1);
+                    if (n < 3 || n % 10000 == 0) {
+                        LOG_WARNING(Render, "GT7: rejecting huge buffer size {:#x} addr={:#x} "
+                                            "(occurrence {})",
+                                    vsharp.GetSize(), vsharp.base_address, n + 1);
+                    }
                     valid = false;
                 }
                 // Empty sharp: some compute shaders still read this binding as a descriptor
@@ -1065,8 +1072,13 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const auto num_fmt = tsharp.GetNumberFmt();
         if (tsharp.width > 16384 || tsharp.height > 16384 || tsharp.depth > 2048 ||
             tsharp.NumLayers() > 256) {
-            LOG_WARNING(Render_Vulkan, "GT7: skipping huge image {}x{}x{} layers={}",
-                        tsharp.width, tsharp.height, tsharp.depth, tsharp.NumLayers());
+            static std::atomic<u32> huge_image_count{0};
+            const u32 n = huge_image_count.fetch_add(1);
+            if (n < 3 || n % 10000 == 0) {
+                LOG_WARNING(Render_Vulkan, "GT7: skipping huge image {}x{}x{} layers={} "
+                                           "(occurrence {})",
+                            tsharp.width, tsharp.height, tsharp.depth, tsharp.NumLayers(), n + 1);
+            }
             valid = false;
             image_bindings[num_images++].image_id = {};
             image_descriptor_array_sizes.push_back(1);
@@ -1080,11 +1092,15 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
         if (!memory->IsValidGpuMapping(tsharp.Address(), 0) ||
             !magic_enum::enum_contains(data_fmt) || !magic_enum::enum_contains(num_fmt)) {
-            LOG_WARNING(Render_Vulkan,
-                        "Rejecting invalid T# address={:#x}, pitch={}, width={}, "
-                        "data_format={}, num_format={}",
-                        tsharp.Address(), tsharp.pitch, tsharp.width, static_cast<u32>(data_fmt),
-                        static_cast<u32>(num_fmt));
+            static std::atomic<u32> bad_tsharp_count{0};
+            const u32 n = bad_tsharp_count.fetch_add(1);
+            if (n < 3 || n % 10000 == 0) {
+                LOG_WARNING(Render_Vulkan,
+                            "Rejecting invalid T# address={:#x}, pitch={}, width={}, "
+                            "data_format={}, num_format={} (occurrence {})",
+                            tsharp.Address(), tsharp.pitch, tsharp.width, static_cast<u32>(data_fmt),
+                            static_cast<u32>(num_fmt), n + 1);
+            }
             image_bindings[num_images++].image_id = {};
             image_descriptor_array_sizes.push_back(1);
             continue;
@@ -1213,14 +1229,18 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         auto ssharp = sampler.GetSharp(stage);
         if (!ssharp.Valid() || (ssharp.border_color_type.Value() == AmdGpu::BorderColor::Custom &&
                                 liverpool->regs.ta_bc_base.Address() == 0)) {
-            LOG_WARNING(Render_Vulkan,
-                        "Rejecting invalid S# max_aniso={}, filter_mode={}, mip_filter={}, "
-                        "border_color_type={}, border_color_base={:#x}",
-                        static_cast<u32>(ssharp.max_aniso.Value()),
-                        static_cast<u32>(ssharp.filter_mode.Value()),
-                        static_cast<u32>(ssharp.mip_filter.Value()),
-                        static_cast<u32>(ssharp.border_color_type.Value()),
-                        liverpool->regs.ta_bc_base.Address());
+            static std::atomic<u32> bad_ssharp_count{0};
+            const u32 n = bad_ssharp_count.fetch_add(1);
+            if (n < 3 || n % 10000 == 0) {
+                LOG_WARNING(Render_Vulkan,
+                            "Rejecting invalid S# max_aniso={}, filter_mode={}, mip_filter={}, "
+                            "border_color_type={}, border_color_base={:#x} (occurrence {})",
+                            static_cast<u32>(ssharp.max_aniso.Value()),
+                            static_cast<u32>(ssharp.filter_mode.Value()),
+                            static_cast<u32>(ssharp.mip_filter.Value()),
+                            static_cast<u32>(ssharp.border_color_type.Value()),
+                            liverpool->regs.ta_bc_base.Address(), n + 1);
+            }
             ssharp = AmdGpu::Sampler{};
         }
         if (needs_nearest_samplers) {

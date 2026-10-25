@@ -1286,7 +1286,18 @@ Error PS4_SYSV_ABI sceSaveDataMount2(const OrbisSaveDataMount2* mount,
     }
     LOG_DEBUG(Lib_SaveData, "called dirName: {}, mode: {:0b}, blocks: {}",
               mount->dirName->data.to_view(), (int)mount->mountMode, mount->blocks);
-    return saveDataMount(mount, mount_result);
+    const auto res = saveDataMount(mount, mount_result);
+    // The result matters: a title that gets NOT_FOUND/BUSY here silently skips saving, which is
+    // what GT7 does when it decides it has no profile (the wizard then runs on every boot).
+    if (res == Error::OK && mount_result != nullptr) {
+        LOG_DEBUG(Lib_SaveData, "mount ok: dirName={} point={} status={}",
+                  mount->dirName->data.to_view(), mount_result->mount_point.data.to_view(),
+                  (int)mount_result->mount_status);
+    } else {
+        LOG_DEBUG(Lib_SaveData, "mount failed: dirName={} error={}",
+                  mount->dirName->data.to_view(), (int)res);
+    }
+    return res;
 }
 
 int PS4_SYSV_ABI sceSaveDataMount5() {
@@ -1587,6 +1598,8 @@ Error PS4_SYSV_ABI sceSaveDataSetupSaveDataMemory2(const OrbisSaveDataMemorySetu
     try {
         size_t existed_size = SaveMemory::SetupSaveMemory(setupParam->userId, slot_id,
                                                           g_game_serial, setupParam->memorySize);
+        LOG_DEBUG(Lib_SaveData, "save memory: existed_size={} requested={}", existed_size,
+                  setupParam->memorySize);
         if (existed_size == 0) { // Just created
             if (g_fw_ver >= ElfInfo::FW_450 && setupParam->initParam != nullptr) {
                 auto& sfo = SaveMemory::GetParamSFO(slot_id);
