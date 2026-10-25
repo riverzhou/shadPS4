@@ -7,11 +7,17 @@
 #include "common/types.h"
 
 #include <atomic>
+#include <map>
+#include <mutex>
+#include <string>
 
 namespace Core::Loader {
 class SymbolsResolver;
 }
 namespace Libraries::Fiber {
+
+/// Append the fiber counters to a stall report (entries, exits, per-thread depth).
+void FiberTraceDump(std::string& report);
 
 #define ORBIS_FIBER_MAX_NAME_LENGTH (31)
 #define ORBIS_FIBER_CONTEXT_MINIMUM_SIZE (512)

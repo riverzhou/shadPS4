@@ -6,6 +6,7 @@
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "core/libraries/fiber/fiber_error.h"
+#include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/libs.h"
 #include "core/tls.h"
 
@@ -147,6 +148,44 @@ void PS4_SYSV_ABI _sceFiberTerminate(OrbisFiber* fiber, u64 arg_on_return, Orbis
     __builtin_trap();
 }
 
+namespace {
+// A fiber that is entered and never returns leaves its owner spinning. Counting entries and exits,
+// and the per-thread nesting depth, is enough to see that in a stall report.
+std::atomic<u64> g_fiber_enters{0};
+std::atomic<u64> g_fiber_exits{0};
+std::atomic<u64> g_fiber_switches{0};
+std::atomic<u64> g_fiber_created{0};
+std::mutex g_fiber_depth_lock;
+std::map<u32, int> g_fiber_depth;
+} // namespace
+
+void FiberTraceDump(std::string& report) {
+    const std::string nl(1, static_cast<char>(10));
+    std::scoped_lock lk{g_fiber_depth_lock};
+    report += "  --- fiber activity ---" + nl;
+    report += "  created=" + std::to_string(g_fiber_created.load()) +
+              " enters=" + std::to_string(g_fiber_enters.load()) +
+              " exits=" + std::to_string(g_fiber_exits.load()) +
+              " switches=" + std::to_string(g_fiber_switches.load()) + nl;
+    for (const auto& [tid, depth] : g_fiber_depth) {
+        report += "  tid=" + std::to_string(tid) + " fiber depth=" +
+                  std::to_string(depth) + nl;
+    }
+}
+
+static void FiberDepthAdd(int delta) {
+    const auto* current = Kernel::g_curthread;
+    if (current == nullptr) {
+        return;
+    }
+    std::scoped_lock lk{g_fiber_depth_lock};
+    int& depth = g_fiber_depth[static_cast<u32>(current->tid.load())];
+    depth += delta;
+    if (depth < 0) {
+        depth = 0;
+    }
+}
+
 s32 PS4_SYSV_ABI sceFiberInitializeImpl(OrbisFiber* fiber, const char* name, OrbisFiberEntry entry,
                                         u64 arg_on_initialize, void* addr_context, u64 size_context,
                                         const OrbisFiberOptParam* opt_param, u32 flags,
@@ -248,6 +287,7 @@ s32 PS4_SYSV_ABI sceFiberFinalize(OrbisFiber* fiber) {
     if (fiber->magic_start != kFiberSignature0 || fiber->magic_end != kFiberSignature1) {
         return ORBIS_FIBER_ERROR_INVALID;
     }
+    g_fiber_created.fetch_add(1, std::memory_order_relaxed);
 
     FiberState expected = FiberState::Idle;
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Terminated)) {
@@ -286,6 +326,8 @@ s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size
     if (!fiber->state.compare_exchange_strong(expected, FiberState::Run)) {
         return ORBIS_FIBER_ERROR_STATE;
     }
+    g_fiber_enters.fetch_add(1, std::memory_order_relaxed);
+    FiberDepthAdd(1);
 
     OrbisFiberContext ctx{};
     ctx.current_fiber = fiber;
@@ -330,11 +372,14 @@ s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size
     }
 
     tcb->tcb_fiber = nullptr;
+    g_fiber_exits.fetch_add(1, std::memory_order_relaxed);
+    FiberDepthAdd(-1);
     return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceFiberSwitchImpl(OrbisFiber* fiber, void* addr_context, u64 size_context,
                                     u64 arg_on_run_to, u64* arg_on_run) {
+    g_fiber_switches.fetch_add(1, std::memory_order_relaxed);
     if (!fiber) {
         return ORBIS_FIBER_ERROR_NULL;
     }

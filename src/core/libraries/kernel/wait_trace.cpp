@@ -20,6 +20,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
+#include "core/libraries/fiber/fiber.h"
 #include "core/libraries/kernel/guest_stack_dump.h"
 #include "core/linker.h"
 #include "core/libraries/kernel/threads/pthread.h"
@@ -407,6 +408,8 @@ void DumpGuestWaitRing() {
     const std::string nl(1, static_cast<char>(10));
     LOG_INFO(Kernel, "guest wait ring #{} (last wait per thread, base in the boot log)", index);
     std::string report = "=== freeze dump #" + std::to_string(index) + " ===" + nl;
+
+    Libraries::Fiber::FiberTraceDump(report);
 
     // What each waiting thread called right before it went to sleep. A stall is almost always a
     // call that never came back, so the tail of this history names the subsystem.
