@@ -521,6 +521,11 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             pData[i] = {};
             pData[i].connected = 1;
             pData[i].connectedCount = 1;
+            // A zeroed stick reads as "full left and full up", not as centred. The title drives
+            // with it, so a pad that reports connected has to report a centred stick too.
+            pData[i].leftStick = {128, 128};
+            pData[i].rightStick = {128, 128};
+            pData[i].orientation = {0.0f, 0.0f, 0.0f, 1.0f};
         }
         processed = num;
     }
@@ -578,6 +583,16 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         const bool k_cross = pressed(VK_RETURN);
         const bool k_circle = pressed(VK_BACK);
         const bool k_options = pressed(VK_ESCAPE);
+        // Throttle and brake: the title's pedal choice can be R2/L2, and a menu-only keyboard
+        // could not drive at all. Space = R2 (accelerate), left shift = L2 (brake).
+        const bool k_r2 = pressed(VK_SPACE);
+        const bool k_l2 = pressed(VK_LSHIFT);
+        // Left stick, for the title's default "steer with the left stick" choice: A/D steer,
+        // W/S push the stick forward/back.
+        const bool k_stick_left = pressed('A');
+        const bool k_stick_right = pressed('D');
+        const bool k_stick_up = pressed('W');
+        const bool k_stick_down = pressed('S');
 #else
         const bool* keys = SDL_GetKeyboardState(nullptr);
         const bool k_up = keys[SDL_SCANCODE_UP];
@@ -587,6 +602,12 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         const bool k_cross = keys[SDL_SCANCODE_RETURN];
         const bool k_circle = keys[SDL_SCANCODE_BACKSPACE];
         const bool k_options = keys[SDL_SCANCODE_ESCAPE];
+        const bool k_r2 = keys[SDL_SCANCODE_SPACE];
+        const bool k_l2 = keys[SDL_SCANCODE_LSHIFT];
+        const bool k_stick_left = keys[SDL_SCANCODE_A];
+        const bool k_stick_right = keys[SDL_SCANCODE_D];
+        const bool k_stick_up = keys[SDL_SCANCODE_W];
+        const bool k_stick_down = keys[SDL_SCANCODE_S];
 #endif
         u32 extra = 0;
         if (k_up) {
@@ -609,6 +630,20 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         }
         if (k_options) {
             extra |= std::to_underlying(OrbisPadButtonDataOffset::Options);
+        }
+        if (k_r2) {
+            extra |= std::to_underlying(OrbisPadButtonDataOffset::R2);
+            pData[0].analogButtons.r2 = 255;
+        }
+        if (k_l2) {
+            extra |= std::to_underlying(OrbisPadButtonDataOffset::L2);
+            pData[0].analogButtons.l2 = 255;
+        }
+        if (k_stick_left != k_stick_right) {
+            pData[0].leftStick.x = k_stick_left ? 0 : 255;
+        }
+        if (k_stick_up != k_stick_down) {
+            pData[0].leftStick.y = k_stick_up ? 0 : 255;
         }
         if (extra != 0) {
             pData[0].buttons =
@@ -765,6 +800,10 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::Left);
                 } else if (name == "right") {
                     file_button = static_cast<u32>(OrbisPadButtonDataOffset::Right);
+                } else if (name == "r2") {
+                    file_button = static_cast<u32>(OrbisPadButtonDataOffset::R2);
+                } else if (name == "l2") {
+                    file_button = static_cast<u32>(OrbisPadButtonDataOffset::L2);
                 }
                 if (file_button != 0) {
                     static const u64 default_hold_ms = [] {
@@ -789,6 +828,13 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         if (file_button != 0) {
             pData[0].buttons = pData[0].buttons |
                               static_cast<OrbisPadButtonDataOffset>(file_button);
+            // The triggers are analog on this pad: a pressed R2 has to report full travel, or a
+            // title that reads the axis (rather than the button bit) never sees the throttle.
+            if (file_button == static_cast<u32>(OrbisPadButtonDataOffset::R2)) {
+                pData[0].analogButtons.r2 = 255;
+            } else if (file_button == static_cast<u32>(OrbisPadButtonDataOffset::L2)) {
+                pData[0].analogButtons.l2 = 255;
+            }
         } else if (!auto_input) {
             // Only the external channel is active.
         } else if (ms >= auto_stop_ms) {
