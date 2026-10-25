@@ -1274,22 +1274,30 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
-    // The copied command buffers are shared by every in-flight submission, so account the
-    // submission before anything (SubmitDone) can reset the copy offsets, and keep the copy and
-    // the accounting under the same lock.
-    std::unique_lock submit_lock{submit_mutex};
-    if (EmulatorSettings.IsCopyGpuBuffers()) {
+    // Copy first, under the submit lock, and pin the arena until the submission is accounted
+    // for: SubmitDone may only rewind the arena when num_submits and the pin are both zero.
+    const bool copy = EmulatorSettings.IsCopyGpuBuffers();
+    if (copy) {
+        std::scoped_lock lk{submit_mutex};
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
+        ++arena_refs;
     }
-    ++num_submits;
+
     auto task = ProcessGraphics(dcb);
     {
-        std::scoped_lock lock{queue.m_access};
+        // The dual lock is the deadlock-free acquisition upstream uses; ProcessCeQueue and the
+        // GPU loop take the same two locks in the opposite order, so holding submit_mutex across
+        // ProcessGraphics (as an earlier fix did) is what made the two sides able to deadlock.
+        std::scoped_lock lock{submit_mutex, queue.m_access};
         if (!ccb.empty()) {
             ce_submits.emplace(ProcessCeUpdate(ccb).handle);
             ++num_submits;
         }
         queue.submits.emplace(task.handle);
+        ++num_submits;
+        if (copy) {
+            --arena_refs; // from here on num_submits keeps the arena alive
+        }
         submit_cv.notify_one();
     }
 }

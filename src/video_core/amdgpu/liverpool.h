@@ -74,10 +74,11 @@ public:
 
     void SubmitDone() noexcept {
         std::scoped_lock lk{submit_mutex};
-        // Only recycle the command-buffer copies when nothing is parsing them; an in-flight
-        // submission keeps a span into this buffer, and rewinding it would overwrite a stream the
-        // GPU thread has not finished with.
-        if (num_submits == 0) {
+        // Recycle the copy arena only when nothing can reference it: every submission has been
+        // parsed (num_submits == 0) and no copy is waiting to be enqueued (arena_refs == 0).
+        // Rewinding while either holds overwrites a command stream the GPU thread still reads,
+        // and the title then executes garbage and wedges.
+        if (num_submits == 0 && arena_refs == 0) {
             mapped_queues[GfxQueueId].ccb_buffer_offset = 0;
             mapped_queues[GfxQueueId].dcb_buffer_offset = 0;
         }
@@ -237,6 +238,8 @@ private:
     const bool guest_markers_enabled;
     std::jthread process_thread{};
     std::atomic<u32> num_submits{};
+    // Copies taken but not yet accounted as a submission; guarded by submit_mutex.
+    u32 arena_refs{};
     std::atomic<u32> num_commands{};
     std::atomic<bool> submit_done{};
     std::mutex submit_mutex;
