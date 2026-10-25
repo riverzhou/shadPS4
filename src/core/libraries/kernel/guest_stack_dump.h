@@ -14,6 +14,10 @@ void StartGuestStackDumpTimer();
 /// Log instruction and stack pointer of every live guest thread.
 void DumpGuestThreadStacks();
 
+/// One line per thread with its current instruction pointer. Used by stall dumps to see where a
+/// spinning thread actually is inside the guest image.
+void LogThreadRips();
+
 /// Sample the instruction pointer of one guest thread (named by SHADPS4_SAMPLE_RIP_THREAD) and
 /// log a histogram every few seconds. Used to tell a guest spin loop (concentrated addresses in
 /// the module) from a host wait (one address in a system DLL). No-op when the variable is unset.

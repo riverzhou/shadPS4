@@ -385,6 +385,9 @@ void DumpHleTail(const char* path) {
                 << std::string_view{hist.names[slot]}.substr(0, 120) << nl;
         }
     }
+    if (std::getenv("SHADPS4_DUMP_RIPS") != nullptr) {
+        LogThreadRips();
+    }
     out << DumpSemaSnapshot();
     LOG_INFO(Kernel, "HLE tail written to {}", path);
 }

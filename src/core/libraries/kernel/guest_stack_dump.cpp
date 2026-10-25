@@ -62,6 +62,38 @@ void DumpOneThread(Pthread* thread) {
 } // namespace
 #endif
 
+void LogThreadRips() {
+#ifdef _WIN32
+    auto* thread_state = ThrState::Instance();
+    if (!thread_state->thread_list_lock.try_lock()) {
+        return;
+    }
+    struct Unlocker {
+        std::mutex& mutex;
+        ~Unlocker() { mutex.unlock(); }
+    } unlocker{thread_state->thread_list_lock};
+    for (Pthread* thread : thread_state->threads) {
+        if (thread == nullptr || !thread->native_thr) {
+            continue;
+        }
+        const auto handle = reinterpret_cast<HANDLE>(thread->native_thr->GetHandle());
+        if (handle == nullptr || handle == GetCurrentThread()) {
+            continue;
+        }
+        if (SuspendThread(handle) == static_cast<DWORD>(-1)) {
+            continue;
+        }
+        CONTEXT ctx{};
+        ctx.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(handle, &ctx)) {
+            LOG_INFO(Kernel, "rip sample thread='{}' tid={} rip={:#x}", thread->name,
+                     thread->tid.load(), ctx.Rip);
+        }
+        ResumeThread(handle);
+    }
+#endif
+}
+
 void DumpGuestThreadStacks() {
 #ifdef _WIN32
     LOG_INFO(Kernel, "guest stack dump requested");
