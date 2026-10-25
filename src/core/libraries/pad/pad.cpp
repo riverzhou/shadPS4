@@ -11,6 +11,7 @@
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/emulator_settings.h"
+#include "core/libraries/kernel/guest_stack_dump.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad_errors.h"
 #include "core/libraries/pad/pad_menu_state.h"
@@ -983,6 +984,15 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             LOG_INFO(Lib_Pad, "auto input: buttons {:#x} -> {:#x} at {} ms (screen={})",
                      buttons_prev, buttons, ms, static_cast<int>(GetMenuScreen()));
             buttons_prev = buttons;
+        }
+        // Debug-only: capture the guest call chain of the thread that polls the pad while a
+        // button is down. The menu lives outside every module image, so its address range has to
+        // come from a live stack.
+        if (buttons != 0 && std::getenv("SHADPS4_TRACE_PAD_STACK") != nullptr) {
+            static std::atomic<u32> pad_stack{0};
+            if (pad_stack.fetch_add(1, std::memory_order_relaxed) < 4) {
+                Libraries::Kernel::LogCurrentStackWords("pad-read");
+            }
         }
         // Log the delivered state (after injection) at a low rate so menu input can be traced.
         static std::atomic<u32> delivered_log{0};

@@ -23,6 +23,11 @@ void LogThreadRips();
 /// the module) from a host wait (one address in a system DLL). No-op when the variable is unset.
 void StartThreadRipSampler();
 
+/// Log the caller chain of the current thread as raw stack words. Used from HLE entry points
+/// (e.g. the title's own log writer) to name the guest code behind a call when the code is not
+/// part of any module image.
+void LogCurrentStackWords(const char* tag);
+
 /// Start the timer configured with SHADPS4_DUMP_GUEST_MEM=<seconds>. When it expires every
 /// mapped, CPU-readable guest region is written under user/guest_mem (capped by
 /// SHADPS4_DUMP_GUEST_MEM_MAX_MB, default 2048) with a manifest. Needed for code the title loads

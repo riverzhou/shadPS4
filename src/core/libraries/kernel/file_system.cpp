@@ -37,6 +37,7 @@
 #include "core/file_sys/directories/pfs_directory.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/file_system.h"
+#include "core/libraries/kernel/guest_stack_dump.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/posix_error.h"
 #include "core/libraries/libs.h"
@@ -417,6 +418,17 @@ s64 PS4_SYSV_ABI write(s32 fd, const void* buf, u64 nbytes) {
     if (file->IsReadOnly()) {
         *__Error() = POSIX_EBADF;
         return -1;
+    }
+
+    // Debug-only: the title writes its own log through this path. A few samples of the guest
+    // stack at the call site name the code that emits the menu/race log lines, which is not part
+    // of any module image (see SHADPS4_DUMP_GUEST_MEM).
+    if (std::getenv("SHADPS4_TRACE_LOG_STACK") != nullptr &&
+        file->m_guest_name.find("archived.log") != std::string::npos) {
+        static std::atomic<u32> log_trace{0};
+        if (log_trace.fetch_add(1, std::memory_order_relaxed) < 4) {
+            Libraries::Kernel::LogCurrentStackWords("archived.log");
+        }
     }
 
     return file->Write(buf, nbytes);

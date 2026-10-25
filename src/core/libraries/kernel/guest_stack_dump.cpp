@@ -281,6 +281,27 @@ void StartGuestStackDumpTimer() {
     });
 }
 
+void LogCurrentStackWords(const char* tag) {
+#ifdef _WIN32
+    const auto* frame = static_cast<const u64*>(_AddressOfReturnAddress());
+    LOG_INFO(Kernel, "guest stack at '{}':", tag);
+    for (int i = 0; i < 96; ++i) {
+        u64 value = 0;
+        __try {
+            value = frame[i];
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            break;
+        }
+        // Guest code lives below the user maximum; higher values are host/emulator addresses.
+        if (value >= 0x1000 && value < 0x600000000000ull) {
+            LOG_INFO(Kernel, "  [{}] {:#x}", i, value);
+        }
+    }
+#else
+    (void)tag;
+#endif
+}
+
 void StartGuestMemoryDumpTimer() {
     static std::once_flag once;
     std::call_once(once, [] {
