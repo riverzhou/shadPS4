@@ -760,9 +760,17 @@ void PatchImageSampleArgs(IR::Inst& inst, Info& info, const ImageResource& image
         }
         if (unnormalized) {
             // Normalize the coordinate for sampling, dividing by its corresponding dimension.
+            // A texel coordinate addresses the texel centre, so the normalized position is
+            // (coord + 0.5) / dim. Dividing the raw coordinate puts the sample point on the texel
+            // corner, which point sampling hides but linear filtering turns into a blend with the
+            // neighbouring texel - a half-texel shift that is easy to mistake for a texture bug.
+            static const bool edge_based = std::getenv("SHADPS4_UV_EDGE") != nullptr;
             const auto dim =
                 ir.ConvertUToF(32, 32, IR::U32{ir.CompositeExtract(dimensions, dim_idx)});
-            return ir.FPDiv(coord, dim);
+            if (edge_based) {
+                return ir.FPDiv(coord, dim);
+            }
+            return ir.FPDiv(ir.FPAdd(coord, ir.Imm32(0.5f)), dim);
         }
         return coord;
     };
