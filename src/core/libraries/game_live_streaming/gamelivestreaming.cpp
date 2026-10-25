@@ -66,8 +66,17 @@ int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus(OrbisGameLiveStreamingStat
     return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus2() {
-    LOG_ERROR(Lib_GameLiveStreaming, "(STUBBED) called");
+int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus2(OrbisGameLiveStreamingStatus2* status) {
+    // The title polls this from every job worker. Returning OK without filling the structure left
+    // the caller reading uninitialised memory as "broadcasting state", which is a good way to hang
+    // a job. Report the same idle state as GetCurrentStatus does.
+    if (status == nullptr) {
+        LOG_ERROR(Lib_GameLiveStreaming, "(STUBBED) called with a null status");
+        return ORBIS_OK;
+    }
+    memset(status, 0, sizeof(*status));
+    status->isOnAir = false;
+    LOG_DEBUG(Lib_GameLiveStreaming, "(STUBBED) called");
     return ORBIS_OK;
 }
 

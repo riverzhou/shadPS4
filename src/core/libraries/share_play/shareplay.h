@@ -28,7 +28,7 @@ struct OrbisSharePlayConnectionInfo {
 
 int PS4_SYSV_ABI sceSharePlayCrashDaemon();
 int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfo(OrbisSharePlayConnectionInfo* pInfo);
-int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfoA();
+int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfoA(OrbisSharePlayConnectionInfo* pInfo);
 int PS4_SYSV_ABI sceSharePlayGetCurrentInfo();
 int PS4_SYSV_ABI sceSharePlayGetEvent();
 int PS4_SYSV_ABI sceSharePlayInitialize();

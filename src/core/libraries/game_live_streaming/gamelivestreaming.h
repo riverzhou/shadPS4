@@ -41,7 +41,7 @@ int PS4_SYSV_ABI sceGameLiveStreamingEnableLiveStreaming();
 int PS4_SYSV_ABI sceGameLiveStreamingEnableSocialFeedback();
 int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentBroadcastScreenLayout();
 int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus(OrbisGameLiveStreamingStatus* status);
-int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus2();
+int PS4_SYSV_ABI sceGameLiveStreamingGetCurrentStatus2(OrbisGameLiveStreamingStatus2* status);
 int PS4_SYSV_ABI sceGameLiveStreamingGetProgramInfo();
 int PS4_SYSV_ABI sceGameLiveStreamingGetSocialFeedbackMessages();
 int PS4_SYSV_ABI sceGameLiveStreamingGetSocialFeedbackMessagesCount();

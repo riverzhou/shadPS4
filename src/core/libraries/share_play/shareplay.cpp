@@ -21,8 +21,17 @@ int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfo(OrbisSharePlayConnectionIn
     return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfoA() {
-    LOG_ERROR(Lib_SharePlay, "(STUBBED) called");
+int PS4_SYSV_ABI sceSharePlayGetCurrentConnectionInfoA(OrbisSharePlayConnectionInfo* pInfo) {
+    // Same trap as the streaming status: OK with an unwritten structure makes the caller act on
+    // whatever the stack happened to hold. Report "not connected".
+    if (pInfo == nullptr) {
+        LOG_ERROR(Lib_SharePlay, "(STUBBED) called with a null info");
+        return ORBIS_OK;
+    }
+    memset(pInfo, 0, sizeof(*pInfo));
+    pInfo->status = 0;
+    pInfo->mode = 0;
+    LOG_DEBUG(Lib_SharePlay, "(STUBBED) called");
     return ORBIS_OK;
 }
 
