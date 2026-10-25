@@ -232,6 +232,23 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         return;
     }
 
+    // Debug switch: skip every draw that uses a pipeline built from the given vertex shader
+    // key. The GPU trace only knows pipeline pointers (which move between runs), while the
+    // per-stage key hash is stable, so this is what a bisect can compare across runs.
+    static const u64 skip_vs_key = [] {
+        const char* env = std::getenv("SHADPS4_SKIP_PIPELINE");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+    }();
+    if (skip_vs_key != 0 &&
+        pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Vertex)] == skip_vs_key) {
+        static std::atomic<u32> skipped{0};
+        if (skipped.fetch_add(1, std::memory_order_relaxed) < 4) {
+            LOG_WARNING(Render_Vulkan, "Skipping draw on pipeline with vs key {:#x} ({} indices)",
+                        skip_vs_key, regs.num_indices);
+        }
+        return;
+    }
+
     PrepareRenderState(pipeline);
     if (!BindResources(pipeline)) {
         return;
