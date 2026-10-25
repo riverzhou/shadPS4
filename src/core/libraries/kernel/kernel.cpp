@@ -327,7 +327,14 @@ s32 PS4_SYSV_ABI sceKernelGetProcessType(s32 pid) {
 }
 
 s32 PS4_SYSV_ABI __sys_regmgr_call(u32 op, u32 key, void* result, void* value, u64 len) {
-    LOG_ERROR(Lib_Kernel, "(STUBBED) called, op: {:#x}, key: {}, len: {}", op, key, len);
+    // A registry read has to produce defined data. Leaving the caller's buffer untouched means it
+    // reads whatever was on its stack, which is enough to send a title down a completely different
+    // path - GT7 reads display related keys on its first boot, right before building the display
+    // settings page.
+    LOG_DEBUG(Lib_Kernel, "(STUBBED) called, op: {:#x}, key: {}, len: {}", op, key, len);
+    if (result != nullptr && len > 0 && len <= 0x1000) {
+        std::memset(result, 0, len);
+    }
     return ORBIS_OK;
 }
 
