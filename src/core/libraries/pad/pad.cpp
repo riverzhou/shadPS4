@@ -937,6 +937,19 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             }
         }
     }
+    if (Libraries::Kernel::TraceHleEnabled()) {
+        // A script that sees a stall writes user/dump_request; answering it here means the ring
+        // describes the moment of the stall rather than whenever the dump timer happens to fire.
+        static std::atomic<u32> dump_poll{0};
+        if (dump_poll.fetch_add(1, std::memory_order_relaxed) % 300 == 0) {
+            std::error_code ec;
+            const std::filesystem::path request{"user/dump_request"};
+            if (std::filesystem::exists(request, ec)) {
+                std::filesystem::remove(request, ec);
+                Libraries::Kernel::DumpHleTail("user/log/hle_tail.txt");
+            }
+        }
+    }
     return processed;
 }
 

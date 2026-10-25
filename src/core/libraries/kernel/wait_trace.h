@@ -18,6 +18,10 @@ void RecordGuestWait(const char* name, u64 guest_ra, u64 obj = 0);
 /// it was talking to right before it went to sleep, which is what a stall report needs. Enabled
 /// only when SHADPS4_TRACE_HLE is set; the recorded names are static strings, so this is cheap.
 bool TraceHleEnabled();
+
+/// Write the recent HLE calls of every thread (name and timestamp) to a file. Used when an external
+/// script detects a stall: the tail names the work each thread did right before it stopped.
+void DumpHleTail(const char* path);
 void RecordHleCall(const char* name);
 
 /// Keep the most recent semaphore wait/signal events so a wait dump can show whether the

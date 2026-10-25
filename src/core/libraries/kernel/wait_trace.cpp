@@ -327,6 +327,7 @@ namespace {
 struct HleHistory {
     static constexpr std::size_t Depth = 16;
     const char* names[Depth]{};
+    u64 times[Depth]{};
     std::size_t next = 0;
 };
 
@@ -349,7 +350,11 @@ void RecordHleCall(const char* name) {
         return;
     }
     auto& hist = g_hle_history;
-    hist.names[hist.next % HleHistory::Depth] = name;
+    const auto slot = hist.next % HleHistory::Depth;
+    hist.names[slot] = name;
+    hist.times[slot] = static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count());
     ++hist.next;
     const auto* current = g_curthread;
     if (current == nullptr) {
@@ -359,6 +364,28 @@ void RecordHleCall(const char* name) {
     if (g_hle_by_tid.size() < 400) {
         g_hle_by_tid[static_cast<u32>(current->tid.load())] = hist;
     }
+}
+
+void DumpHleTail(const char* path) {
+    const std::string nl(1, static_cast<char>(10));
+    std::ofstream out{path, std::ios::trunc};
+    if (!out) {
+        return;
+    }
+    std::scoped_lock lk{g_hle_lock};
+    for (const auto& [tid, hist] : g_hle_by_tid) {
+        out << "tid=" << tid << nl;
+        const std::size_t count = std::min<std::size_t>(hist.next, HleHistory::Depth);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::size_t slot = (hist.next - count + i) % HleHistory::Depth;
+            if (hist.names[slot] == nullptr) {
+                continue;
+            }
+            out << "  " << hist.times[slot] << " "
+                << std::string_view{hist.names[slot]}.substr(0, 120) << nl;
+        }
+    }
+    LOG_INFO(Kernel, "HLE tail written to {}", path);
 }
 
 void RecordGuestWait(const char* name, u64 guest_ra, u64 obj) {
