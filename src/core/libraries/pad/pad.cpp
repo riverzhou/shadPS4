@@ -526,6 +526,12 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
             pData[i].leftStick = {128, 128};
             pData[i].rightStick = {128, 128};
             pData[i].orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+            // A timestamp of zero means "no sample time" to a title that measures how long a
+            // button was held; report a real monotonic one like a physical pad does.
+            pData[i].timestamp = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count());
         }
         processed = num;
     }
