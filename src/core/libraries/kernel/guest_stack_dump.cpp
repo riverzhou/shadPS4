@@ -292,10 +292,7 @@ void LogCurrentStackWords(const char* tag) {
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             break;
         }
-        // Guest code lives below the user maximum; higher values are host/emulator addresses.
-        if (value >= 0x1000 && value < 0x600000000000ull) {
-            LOG_INFO(Kernel, "  [{}] {:#x}", i, value);
-        }
+        LOG_INFO(Kernel, "  [{}] {:#x}", i, value);
     }
 #else
     (void)tag;
