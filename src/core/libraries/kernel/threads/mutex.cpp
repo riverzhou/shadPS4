@@ -244,7 +244,8 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
      * the lock is likely to be released quickly and it is
      * faster than entering the kernel
      */
-    if (m_protocol == PthreadMutexProt::None) [[likely]] {
+    static const bool spin_disabled = std::getenv("SHADPS4_NO_MUTEX_SPIN") != nullptr;
+    if (m_protocol == PthreadMutexProt::None && !spin_disabled) [[likely]] {
         s32 count = m_spinloops;
         while (count--) {
             if (m_lock.try_lock()) {
