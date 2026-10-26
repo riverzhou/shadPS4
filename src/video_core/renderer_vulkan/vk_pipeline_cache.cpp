@@ -487,7 +487,10 @@ bool PipelineCache::RefreshGraphicsKey() {
         }
 
         // Fill color blending information
-        if (regs.blend_control[cb].enable && !col_buf.info.blend_bypass) {
+        // CB_COLOR_CONTROL.BLEND_BYPASS is not a blend disable on the PS4: titles set it while
+        // still relying on the per-target blend factors (GT7's Music Rally map draws its red
+        // background with blend enabled but bypass set, and it must stay transparent).
+        if (regs.blend_control[cb].enable) {
             key.blend_controls[cb] = regs.blend_control[cb];
         }
 
