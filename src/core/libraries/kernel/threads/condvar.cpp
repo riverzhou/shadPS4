@@ -393,6 +393,10 @@ int PS4_SYSV_ABI posix_pthread_cond_signal(PthreadCondT* cond) {
 }
 
 int PS4_SYSV_ABI posix_pthread_cond_signalto_np(PthreadCondT* cond, Pthread* thread) {
+    // A targeted wake is still a wake: the signal census must see it, or a condvar that is only
+    // signalled through this path looks like it was never signalled at all.
+    RecordCondSignal(reinterpret_cast<u64>(cond), false);
+    TraceCondSignal(reinterpret_cast<u64>(cond), "signalto");
     PthreadCond* cvp{};
     CHECK_AND_INIT_COND
     return cvp->Signal(thread);
