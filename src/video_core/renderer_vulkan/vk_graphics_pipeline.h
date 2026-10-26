@@ -39,6 +39,7 @@ struct GraphicsPipelineKey {
     std::array<vk::ColorComponentFlags, AmdGpu::NUM_COLOR_BUFFERS> write_masks;
     AmdGpu::ColorBufferMask cb_shader_mask;
     AmdGpu::ColorControl::LogicOp logic_op;
+    u32 force_blend;
     u8 num_samples;
     u8 depth_samples;
     std::array<u8, AmdGpu::NUM_COLOR_BUFFERS> color_samples;

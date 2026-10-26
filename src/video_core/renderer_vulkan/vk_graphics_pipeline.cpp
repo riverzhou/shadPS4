@@ -331,13 +331,14 @@ GraphicsPipeline::GraphicsPipeline(
         const auto alpha_blend =
             control.separate_alpha_blend ? LiverpoolToVK::BlendOp(control.alpha_func) : color_blend;
 
+        const bool force_blend = key.force_blend != 0;
         attachments[i] = vk::PipelineColorBlendAttachmentState{
-            .blendEnable = control.enable,
-            .srcColorBlendFactor = src_color,
-            .dstColorBlendFactor = dst_color,
+            .blendEnable = static_cast<vk::Bool32>(force_blend || control.enable),
+            .srcColorBlendFactor = force_blend ? vk::BlendFactor::eSrcAlpha : src_color,
+            .dstColorBlendFactor = force_blend ? vk::BlendFactor::eOneMinusSrcAlpha : dst_color,
             .colorBlendOp = color_blend,
-            .srcAlphaBlendFactor = src_alpha,
-            .dstAlphaBlendFactor = dst_alpha,
+            .srcAlphaBlendFactor = force_blend ? vk::BlendFactor::eOne : src_alpha,
+            .dstAlphaBlendFactor = force_blend ? vk::BlendFactor::eOneMinusSrcAlpha : dst_alpha,
             .alphaBlendOp = alpha_blend,
             .colorWriteMask =
                 instance.IsDynamicColorWriteMaskSupported()
