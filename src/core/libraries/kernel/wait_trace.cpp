@@ -333,12 +333,15 @@ struct HleHistory {
     std::size_t next = 0;
 };
 
-thread_local HleHistory g_hle_history;
+// The registry below outlives the threads it describes: a guest thread that exits must not take
+// its history with it, or a later stall dump dereferences freed thread_local storage. Each thread
+// therefore gets a heap history owned by the registry, and only keeps a pointer to it.
+std::vector<std::unique_ptr<HleHistory>> g_hle_owned;
+thread_local HleHistory* g_hle_history = nullptr;
 // Registration is done once per thread; the recording itself only touches thread-local storage, so
 // the tracer does not add a global lock to every HLE call (which measurably slowed the title down).
 std::mutex g_hle_lock;
 std::vector<std::pair<u32, HleHistory*>> g_hle_threads;
-thread_local bool g_hle_registered = false;
 } // namespace
 
 void RecordHleCallRet(const char* name, u64 ret) {
@@ -346,8 +349,8 @@ void RecordHleCallRet(const char* name, u64 ret) {
     if (!TraceHleEnabled()) {
         return;
     }
-    if (g_hle_history.next > 0) {
-        g_hle_history.rets[(g_hle_history.next - 1) % HleHistory::Depth] = ret;
+    if (g_hle_history != nullptr && g_hle_history->next > 0) {
+        g_hle_history->rets[(g_hle_history->next - 1) % HleHistory::Depth] = ret;
     }
 }
 
@@ -364,22 +367,30 @@ void RecordHleCall(const char* name) {
         pretty.find("Libraries::Pad::") != std::string_view::npos) {
         return;
     }
-    auto& hist = g_hle_history;
+    if (g_hle_history == nullptr) {
+        const auto* current = g_curthread;
+        if (current == nullptr) {
+            return;
+        }
+        // Cap the registry: a title that spawns short-lived threads would otherwise grow it
+        // without limit, and every entry is kept until shutdown.
+        std::scoped_lock lk{g_hle_lock};
+        if (g_hle_threads.size() < 2048) {
+            g_hle_owned.push_back(std::make_unique<HleHistory>());
+            g_hle_history = g_hle_owned.back().get();
+            g_hle_threads.emplace_back(static_cast<u32>(current->tid.load()), g_hle_history);
+        }
+        if (g_hle_history == nullptr) {
+            return;
+        }
+    }
+    auto& hist = *g_hle_history;
     const auto slot = hist.next % HleHistory::Depth;
     hist.names[slot] = name;
     hist.times[slot] = static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                             std::chrono::steady_clock::now().time_since_epoch())
                                             .count());
     ++hist.next;
-    if (!g_hle_registered) {
-        const auto* current = g_curthread;
-        if (current == nullptr) {
-            return;
-        }
-        g_hle_registered = true;
-        std::scoped_lock lk{g_hle_lock};
-        g_hle_threads.emplace_back(static_cast<u32>(current->tid.load()), &hist);
-    }
 }
 
 void DumpHleTail(const char* path) {
