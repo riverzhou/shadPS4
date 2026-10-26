@@ -1284,6 +1284,48 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             auto& [image_id, desc] = image_bindings[num_images++];
             std::construct_at(&desc, tsharp, image_desc);
 
+            static const auto identity_hashes = [] {
+                std::vector<u64> hashes;
+                const char* env = std::getenv("SHADPS4_IDENTITY_MAPPING_HASHES");
+                if (env == nullptr) {
+                    return hashes;
+                }
+                std::string_view list{env};
+                while (!list.empty()) {
+                    const auto comma = list.find(',');
+                    const auto token = list.substr(0, comma);
+                    hashes.push_back(std::strtoull(std::string{token}.c_str(), nullptr, 0));
+                    if (comma == std::string_view::npos) {
+                        break;
+                    }
+                    list.remove_prefix(comma + 1);
+                }
+                return hashes;
+            }();
+            if (std::ranges::find(identity_hashes, u64{stage.pgm_hash}) != identity_hashes.end()) {
+                desc.view_info.mapping = AmdGpu::IdentityMapping;
+            }
+
+            static const VAddr bind_log_addr = [] {
+                const char* env = std::getenv("SHADPS4_LOG_TEX_BIND");
+                return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+            }();
+            if (bind_log_addr != 0 && tsharp.Address() == bind_log_addr) {
+                static std::atomic<u32> bind_log_count{0};
+                if (bind_log_count.fetch_add(1) < 80) {
+                    LOG_INFO(Render_Vulkan,
+                             "BIND stage={:#x} {}x{} dfmt={} mapping={}x{}x{}x{} idx={} depth={}",
+                             stage.pgm_hash, tsharp.width + 1, tsharp.height + 1,
+                             static_cast<u32>(data_fmt),
+                             static_cast<u32>(desc.view_info.mapping.r),
+                             static_cast<u32>(desc.view_info.mapping.g),
+                             static_cast<u32>(desc.view_info.mapping.b),
+                             static_cast<u32>(desc.view_info.mapping.a),
+                             liverpool->regs.num_indices,
+                             static_cast<u32>(liverpool->regs.depth_control.depth_enable));
+                }
+            }
+
             if (mip_fallback_mode == Shader::MipStorageFallbackMode::ConstantIndex) {
                 ASSERT(num_bindings == 1);
                 desc.view_info.range.base.level += image_desc.constant_mip_index;
