@@ -998,9 +998,16 @@ bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
-            if (vsharp.base_address == 0 || vsharp.GetSize() == 0 ||
-                vsharp.GetSize() >= 0x80000000ULL) {
-                if (vsharp.GetSize() >= 0x80000000ULL) {
+            const u64 requested_size = vsharp.GetSize();
+            // An unbounded V# (size 0xffffffff) is how some titles describe a whole buffer.
+            // Rejecting it binds a null descriptor; clamp to the mapped range and a sane budget
+            // instead, unless the old behaviour is requested for an A/B run.
+            static const bool reject_big_buffer =
+                std::getenv("SHADPS4_REJECT_BIG_BUFFERS") != nullptr;
+            const bool huge_buffer = requested_size >= 0x80000000ULL;
+            if (vsharp.base_address == 0 || requested_size == 0 ||
+                (huge_buffer && reject_big_buffer)) {
+                if (huge_buffer) {
                     // Fire-and-forget per draw: at 1 fps this alone filled the 100 MB log and
                     // truncated the tail we needed. Keep the shape, drop the flood.
                     static std::atomic<u32> huge_buf_count{0};
@@ -1028,12 +1035,23 @@ bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             } else {
                 // A descriptor at the very end of a mapped range clamps to zero bytes; a
                 // zero-sized descriptor range is invalid in Vulkan, so keep a minimal range.
-                const u64 size =
-                    std::max<u64>(memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize()),
-                                  4);
-                if (size != vsharp.GetSize()) {
+                const u64 clamped = memory->ClampRangeSize(vsharp.base_address,
+                                                            std::min<u64>(requested_size,
+                                                                          512ull << 20));
+                const u64 size = std::max<u64>(clamped, 4);
+                if (huge_buffer) {
+                    static std::atomic<u32> clamped_count{0};
+                    const u32 n = clamped_count.fetch_add(1);
+                    if (n < 3 || n % 10000 == 0) {
+                        LOG_WARNING(Render,
+                                    "Clamped unbounded buffer {:#x} -> {} at addr={:#x} "
+                                    "(occurrence {})",
+                                    requested_size, size, vsharp.base_address, n + 1);
+                    }
+                }
+                if (size != requested_size && !huge_buffer) {
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
-                              vsharp.GetSize(), size, stage.pgm_hash);
+                              requested_size, size, stage.pgm_hash);
                 }
                 VideoCore::ObtainBufferFlags flags = {};
                 if (desc.is_written) {
@@ -1087,14 +1105,46 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const auto tsharp = image_desc.GetSharp(stage);
         const auto data_fmt = tsharp.GetDataFmt();
         const auto num_fmt = tsharp.GetNumberFmt();
-        if (tsharp.width > 16384 || tsharp.height > 16384 || tsharp.depth > 2048 ||
-            tsharp.NumLayers() > 256) {
+        // T# width/height/depth are stored as size-1. The guest legitimately uses arrays with
+        // hundreds of layers (GT7 samples 64x64x821 and 128x128x1024 as vegetation/terrain
+        // atlases), so only reject what Vulkan cannot create at all, plus a byte budget that
+        // keeps a malformed descriptor from demanding gigabytes.
+        const u32 width = tsharp.width + 1;
+        const u32 height = tsharp.height + 1;
+        const u32 depth = tsharp.depth + 1;
+        const u32 layers = tsharp.NumLayers();
+        static const u32 layer_cap = [] {
+            const char* env = std::getenv("SHADPS4_MAX_IMAGE_LAYERS");
+            return env != nullptr ? std::strtoul(env, nullptr, 10) : 2048u;
+        }();
+        const u32 max_layers = std::min<u32>(
+            layer_cap, instance.GetPhysicalDevice().getProperties().limits.maxImageArrayLayers);
+        const bool is_volume = tsharp.GetBaseType() == AmdGpu::ImageType::Color3D;
+        const u64 image_bytes = u64(width) * height * (is_volume ? depth : 1) * layers * 4;
+        static const bool reject_big_layers = std::getenv("SHADPS4_REJECT_BIG_IMAGES") != nullptr;
+        const bool too_large = width > 16384 || height > 16384 ||
+                               (is_volume && depth > 2048) || layers > max_layers ||
+                               image_bytes > (512ull << 20) ||
+                               (reject_big_layers && layers > 256);
+        if (!too_large && layers > 256) {
+            static std::atomic<u32> big_image_count{0};
+            const u32 n = big_image_count.fetch_add(1);
+            if (n < 64) {
+                LOG_INFO(Render_Vulkan,
+                         "Allowing large image {}x{}x{} layers={} bytes={} type={} addr={:#x}",
+                         width, height, depth, layers, image_bytes,
+                         static_cast<u32>(tsharp.GetBaseType()), tsharp.Address());
+            }
+        }
+        if (too_large) {
             static std::atomic<u32> huge_image_count{0};
             const u32 n = huge_image_count.fetch_add(1);
             if (n < 3 || n % 10000 == 0) {
-                LOG_WARNING(Render_Vulkan, "GT7: skipping huge image {}x{}x{} layers={} "
-                                           "(occurrence {})",
-                            tsharp.width, tsharp.height, tsharp.depth, tsharp.NumLayers(), n + 1);
+                LOG_WARNING(Render_Vulkan,
+                            "Skipping uncreatable image {}x{}x{} layers={} bytes={} type={} "
+                            "(occurrence {})",
+                            width, height, depth, layers, image_bytes,
+                            static_cast<u32>(tsharp.GetBaseType()), n + 1);
             }
             valid = false;
             image_bindings[num_images++].image_id = {};

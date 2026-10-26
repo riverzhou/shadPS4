@@ -103,8 +103,11 @@ void UniqueImage::Destroy() {
 
 void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     vk::ImageCreateInfo ci = image_ci;
+    // 2048 is the guaranteed Vulkan maximum for array layers on desktop drivers, and titles
+    // legitimately bind 64x64x821 / 128x128x1024 arrays as atlases. Only fall back to the 1x1
+    // dummy when the descriptor cannot describe a Vulkan image at all.
     const bool huge = ci.extent.width > 16384 || ci.extent.height > 16384 ||
-                      ci.extent.depth > 2048 || ci.arrayLayers > 256 ||
+                      ci.extent.depth > 2048 || ci.arrayLayers > 2048 ||
                       ci.mipLevels > 16;
     if (huge) {
         LOG_WARNING(Render_Vulkan,
