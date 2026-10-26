@@ -518,6 +518,13 @@ void Rasterizer::DispatchDirect() {
         return;
     }
     const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    if (std::getenv("SHADPS4_LOG_CS_ALL") != nullptr) {
+        static std::atomic<u32> cs_log{0};
+        if (cs_log.fetch_add(1, std::memory_order_relaxed) < 200) {
+            LOG_INFO(Render_Vulkan, "CSALL hash={:#x} groups={}x{}x{}", cs.pgm_hash,
+                     cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+        }
+    }
     VideoCore::GpuTrace::Record(VideoCore::GpuTrace::Op::Dispatch,
                                 u64(cs_program.dim_x) << 40 | (u64(cs_program.dim_y) << 20) |
                                     u64(cs_program.dim_z),
@@ -1318,8 +1325,9 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 const auto m = desc.view_info.mapping;
                 if (all_count.fetch_add(1, std::memory_order_relaxed) < 3000) {
                     LOG_INFO(Render_Vulkan,
-                             "BINDALL hash={:#x} {}x{} dfmt={} map={}{}{}{} idx={} depth={}",
-                             stage.pgm_hash, tsharp.width + 1, tsharp.height + 1,
+                             "BINDALL hash={:#x} addr={:#x} {}x{} dfmt={} map={}{}{}{} idx={} depth={}",
+                             stage.pgm_hash, tsharp.Address(), tsharp.width + 1,
+                             tsharp.height + 1,
                              static_cast<u32>(data_fmt), static_cast<u32>(m.r),
                              static_cast<u32>(m.g), static_cast<u32>(m.b),
                              static_cast<u32>(m.a), liverpool->regs.num_indices,
