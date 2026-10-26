@@ -195,6 +195,20 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
         const auto image_begin = image.info.guest_address;
         const auto image_end = image.info.guest_address + image.info.guest_size;
         if (image.Overlaps(addr, size)) {
+            // Debug-only: how often is one hot image dirtied, and how large are those writes? A
+            // thousand invalidations to one upload means the refreshes are redundant.
+            static const u64 hot_addr = [] {
+                const char* env = std::getenv("SHADPS4_TRACE_HOT_TEX");
+                return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+            }();
+            if (hot_addr != 0 && image_begin == hot_addr) {
+                static std::atomic<u32> invalidations{0};
+                const u32 n = invalidations.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (n < 10 || n % 500 == 0) {
+                    LOG_INFO(Render_Vulkan, "hot tex invalidated #{} addr={:#x} size={:#x}",
+                             n, addr, size);
+                }
+            }
             // Modified region overlaps image, so the image was definitely accessed by this fault.
             // Untrack the image, so that the range is unprotected and the guest can write freely.
             image.flags |= ImageFlagBits::CpuDirty;
@@ -902,6 +916,22 @@ void TextureCache::RefreshImage(Image& image) {
         return;
     }
 
+    // Debug switch: follow one guest address through the upload path, so "the same texture is
+    // uploaded over and over" can be told apart from "a fresh image is created every time".
+    static const u64 trace_hot_tex = [] {
+        const char* env = std::getenv("SHADPS4_TRACE_HOT_TEX");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+    }();
+    if (trace_hot_tex != 0 && image.info.guest_address == trace_hot_tex) {
+        static std::atomic<u32> n{0};
+        const u32 count = n.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count < 40 || count % 500 == 0) {
+            LOG_INFO(Render_Vulkan,
+                     "hot tex upload #{} uid={:#x} flags={} size={:#x} extent={}x{} levels={}",
+                     count, u64(image.image_uid), u32(image.flags), image.info.guest_size,
+                     image.info.size.width, image.info.size.height, image.info.resources.levels);
+        }
+    }
     scheduler.EndRendering();
 
     const auto [in_buffer, in_offset] =
