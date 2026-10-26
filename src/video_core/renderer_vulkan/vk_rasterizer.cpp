@@ -1371,6 +1371,11 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             if (skip_tex_size[0] != 0 && tsharp.width + 1 == skip_tex_size[0] &&
                 tsharp.height + 1 == skip_tex_size[1]) {
                 skip_draw = true;
+                static std::atomic<u32> skip_log{0};
+                if (skip_log.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    LOG_INFO(Render_Vulkan, "SKIPTEX hash={:#x} {}x{} idx={}", stage.pgm_hash,
+                             tsharp.width + 1, tsharp.height + 1, liverpool->regs.num_indices);
+                }
             }
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
