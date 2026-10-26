@@ -1204,6 +1204,15 @@ bool Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
 
 bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
     bool valid = true;
+    static const std::array<u32, 2> skip_tex_size = [] {
+        std::array<u32, 2> size{};
+        const char* env = std::getenv("SHADPS4_SKIP_TEX_SIZE");
+        if (env != nullptr) {
+            std::sscanf(env, "%ux%u", &size[0], &size[1]);
+        }
+        return size;
+    }();
+    bool skip_draw = false;
     // Set when any sampled view uses a format without linear-filter support; the stage then
     // falls back to point sampling (sampling such formats with a linear sampler is undefined).
     bool needs_nearest_samplers = false;
@@ -1359,6 +1368,10 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 desc.view_info.range.extent.levels = 1;
             }
 
+            if (skip_tex_size[0] != 0 && tsharp.width + 1 == skip_tex_size[0] &&
+                tsharp.height + 1 == skip_tex_size[1]) {
+                skip_draw = true;
+            }
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
             if (std::getenv("SHADPS4_DUMP_TEX_SIZE") != nullptr) {
@@ -1501,7 +1514,7 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         set_write.descriptorType = vk::DescriptorType::eSampler;
         set_write.pImageInfo = &image_infos.back();
     }
-    return valid;
+    return valid && !skip_draw;
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
