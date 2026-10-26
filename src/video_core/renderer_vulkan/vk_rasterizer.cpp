@@ -75,6 +75,7 @@ struct FrameDraw {
 };
 std::array<FrameDraw, 2048> g_frame_draws{};
 u32 g_frame_draw_count{0};
+u32 g_draw_index{0};
 u64 g_recorded_frame{~0ull};
 u32 g_dumped_frames{0};
 const u64 g_dump_after_s = [] {
@@ -82,6 +83,14 @@ const u64 g_dump_after_s = [] {
     return env != nullptr ? std::strtoull(env, nullptr, 10) : u64{0};
 }();
 const auto g_process_start = std::chrono::steady_clock::now();
+const u32 g_skip_draw_start = [] {
+    const char* env = std::getenv("SHADPS4_SKIP_DRAW_INDEX");
+    return env != nullptr ? std::strtoul(env, nullptr, 10) : ~0u;
+}();
+const u32 g_skip_draw_end = [] {
+    const char* env = std::getenv("SHADPS4_SKIP_DRAW_INDEX_END");
+    return env != nullptr ? std::strtoul(env, nullptr, 10) : ~0u;
+}();
 } // namespace
 
 void Rasterizer::NotifyFlip() {
@@ -262,6 +271,23 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         }
     }
     if (!pipeline) {
+        return;
+    }
+
+    {
+        const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
+        if (frame != g_recorded_frame) {
+            g_recorded_frame = frame;
+            g_frame_draw_count = 0;
+            g_draw_index = 0;
+        }
+    }
+    const u32 this_draw_index = g_draw_index++;
+    if (this_draw_index >= g_skip_draw_start && this_draw_index <= g_skip_draw_end) {
+        static std::atomic<u32> skipped_draws{0};
+        if (skipped_draws.fetch_add(1) < 4) {
+            LOG_INFO(Render_Vulkan, "Skipping frame draw #{}", this_draw_index);
+        }
         return;
     }
 
