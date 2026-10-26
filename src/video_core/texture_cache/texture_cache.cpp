@@ -7,6 +7,7 @@
 #include <stb_image_write.h>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <unordered_set>
 
 #include "common/assert.h"
@@ -1347,7 +1348,41 @@ void TextureCache::DebugDumpImage(Image& image) {
         image.info.size.width > 2048 || image.info.size.height > 2048) {
         return;
     }
-    if (image.info.num_bits != 32 || image.info.props.is_block ||
+    if (image.info.props.is_block) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{(w + 3) / 4} * ((h + 3) / 4) * 16;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto base = dir / fmt::format("{:x}_{}x{}_{}", image.info.guest_address, w, h,
+                                            vk::to_string(image.info.pixel_format));
+        std::ofstream bin{base.string() + ".bin", std::ios::binary};
+        bin.write(reinterpret_cast<const char*>(readback.mapped_data.data()), size);
+        bin.close();
+        std::ofstream meta{base.string() + ".txt"};
+        meta << w << " " << h << " " << vk::to_string(image.info.pixel_format) << '\n';
+        meta.close();
+        LOG_INFO(Render_Vulkan, "Dumped block texture {}x{} {} -> {}", w, h,
+                 vk::to_string(image.info.pixel_format), base.string());
+        return;
+    }
+    if (image.info.num_bits != 32 ||
         image.info.pixel_format != vk::Format::eR8G8B8A8Unorm &&
         image.info.pixel_format != vk::Format::eR8G8B8A8Srgb &&
         image.info.pixel_format != vk::Format::eB8G8R8A8Unorm &&
