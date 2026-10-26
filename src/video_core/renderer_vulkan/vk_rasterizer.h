@@ -26,6 +26,7 @@ class Runtime;
 
 class Rasterizer {
 public:
+    static void NotifyFlip();
     explicit Rasterizer(const Instance& instance, Scheduler& scheduler, Runtime& runtime,
                         AmdGpu::Liverpool* liverpool);
     ~Rasterizer();

@@ -1215,6 +1215,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     free_frame();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
+        Rasterizer::NotifyFlip();
     }
 }
 

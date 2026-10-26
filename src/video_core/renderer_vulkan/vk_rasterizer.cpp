@@ -55,6 +55,39 @@ static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     return push_data;
 }
 
+namespace {
+std::atomic<u64> g_flip_frame{0};
+
+struct FrameDraw {
+    u64 pipeline;
+    u32 indices;
+    u32 blend_enable;
+    u32 src_factor;
+    u32 dst_factor;
+    u32 blend_op;
+    u32 fmt;
+    u32 width;
+    u32 height;
+    s32 sx;
+    s32 sy;
+    u32 sw;
+    u32 sh;
+};
+std::array<FrameDraw, 2048> g_frame_draws{};
+u32 g_frame_draw_count{0};
+u64 g_recorded_frame{~0ull};
+u32 g_dumped_frames{0};
+const u64 g_dump_after_s = [] {
+    const char* env = std::getenv("SHADPS4_DUMP_FRAME_DRAWS_AFTER");
+    return env != nullptr ? std::strtoull(env, nullptr, 10) : u64{0};
+}();
+const auto g_process_start = std::chrono::steady_clock::now();
+} // namespace
+
+void Rasterizer::NotifyFlip() {
+    g_flip_frame.fetch_add(1, std::memory_order_relaxed);
+}
+
 Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime& runtime_,
                        AmdGpu::Liverpool* liverpool_)
     : instance{instance_}, scheduler{scheduler_}, runtime{runtime_}, page_manager{this},
@@ -230,6 +263,51 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
     if (!pipeline) {
         return;
+    }
+
+    static const bool dump_frame_draws =
+        std::getenv("SHADPS4_DUMP_FRAME_DRAWS") != nullptr;
+    if (dump_frame_draws) {
+        const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
+        if (frame != g_recorded_frame) {
+            const auto elapsed = std::chrono::steady_clock::now() - g_process_start;
+            if (g_recorded_frame != ~0ull && g_dumped_frames < 3 &&
+                elapsed >= std::chrono::seconds(g_dump_after_s)) {
+                LOG_INFO(Render_Vulkan, "Frame {} had {} draws", g_recorded_frame,
+                         g_frame_draw_count);
+                for (u32 i = 0; i < g_frame_draw_count; ++i) {
+                    const auto& d = g_frame_draws[i];
+                    LOG_INFO(Render_Vulkan,
+                             "  draw#{} pipe={:#x} idx={} blend={} src={:#x} dst={:#x} "
+                             "op={:#x} fmt={} rt={}x{} scissor={},{} {}x{}",
+                             i, d.pipeline, d.indices, d.blend_enable, d.src_factor, d.dst_factor,
+                             d.blend_op, d.fmt, d.width, d.height, d.sx, d.sy, d.sw, d.sh);
+                }
+                ++g_dumped_frames;
+            }
+            g_recorded_frame = frame;
+            g_frame_draw_count = 0;
+        }
+        if (g_frame_draw_count < g_frame_draws.size()) {
+            const auto& cb = regs.color_buffers[0];
+            const auto& bc = regs.blend_control[0];
+            const auto& sc = regs.screen_scissor;
+            g_frame_draws[g_frame_draw_count++] = FrameDraw{
+                .pipeline = reinterpret_cast<u64>(pipeline),
+                .indices = regs.num_indices,
+                .blend_enable = bc.enable,
+                .src_factor = u32(bc.color_src_factor),
+                .dst_factor = u32(bc.color_dst_factor),
+                .blend_op = u32(bc.color_func),
+                .fmt = u32(cb.info.format),
+                .width = cb ? cb.Pitch() : 0,
+                .height = cb ? cb.Height() : 0,
+                .sx = sc.top_left_x,
+                .sy = sc.top_left_y,
+                .sw = sc.GetWidth(),
+                .sh = sc.GetHeight(),
+            };
+        }
     }
 
     // Debug switch: skip every draw that uses a pipeline built from the given vertex shader
