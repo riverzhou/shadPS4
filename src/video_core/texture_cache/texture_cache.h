@@ -182,6 +182,9 @@ public:
     /// Debug helper: dump an image to PNG when its extent matches a filter.
     void DebugDumpImage(Image& image);
 
+    /// Debug helper: try every cached image once (also reaches render targets that are not bound).
+    void DebugDumpAll();
+
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];

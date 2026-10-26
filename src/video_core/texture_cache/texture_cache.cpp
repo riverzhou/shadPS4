@@ -1311,12 +1311,25 @@ void TextureCache::DeleteImage(ImageId image_id) {
     });
 }
 
+void TextureCache::DebugDumpAll() {
+    if (std::getenv("SHADPS4_DUMP_TEX_SIZE") == nullptr) {
+        return;
+    }
+    for (u32 i = 0; i < MAX_IMAGES; ++i) {
+        const ImageId id{static_cast<u32>(i)};
+        if (slot_images.IsAllocated(id)) {
+            DebugDumpImage(slot_images[id]);
+        }
+    }
+}
+
 void TextureCache::DebugDumpImage(Image& image) {
     static const char* filter = std::getenv("SHADPS4_DUMP_TEX_SIZE");
     if (filter == nullptr) {
         return;
     }
     u32 want_w = 0, want_h = 0;
+    const bool dump_all_sizes = std::string_view{filter} == "*";
     if (std::getenv("SHADPS4_DUMP_TEX_LOG") != nullptr) {
         static std::atomic<u32> seen{0};
         if (seen.fetch_add(1) < 500) {
@@ -1325,8 +1338,13 @@ void TextureCache::DebugDumpImage(Image& image) {
                      image.info.num_bits, static_cast<u32>(image.info.props.is_block));
         }
     }
-    if (std::sscanf(filter, "%ux%u", &want_w, &want_h) != 2 ||
-        image.info.size.width != want_w || image.info.size.height != want_h) {
+    if (!dump_all_sizes &&
+        (std::sscanf(filter, "%ux%u", &want_w, &want_h) != 2 ||
+         image.info.size.width != want_w || image.info.size.height != want_h)) {
+        return;
+    }
+    if (image.info.size.width < 256 || image.info.size.height < 64 ||
+        image.info.size.width > 2048 || image.info.size.height > 2048) {
         return;
     }
     if (image.info.num_bits != 32 || image.info.props.is_block ||
