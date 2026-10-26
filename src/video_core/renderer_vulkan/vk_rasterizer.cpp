@@ -260,6 +260,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
 
     const auto& regs = liverpool->regs;
+    static const bool skip_quads = std::getenv("SHADPS4_SKIP_QUADS") != nullptr;
+    if (skip_quads && regs.num_indices <= 8 && regs.blend_control[0].enable) {
+        return;
+    }
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
     const u32 num_instances = regs.num_instances.NumInstances();
     VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed
