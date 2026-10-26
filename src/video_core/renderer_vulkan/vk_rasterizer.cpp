@@ -265,6 +265,11 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         return;
     }
     static const bool skip_opaque_world = std::getenv("SHADPS4_SKIP_OPAQUE_WORLD") != nullptr;
+    static const bool skip_opaque_quads =
+        std::getenv("SHADPS4_SKIP_OPAQUE_QUADS") != nullptr;
+    if (skip_opaque_quads && regs.num_indices <= 8 && !regs.blend_control[0].enable) {
+        return;
+    }
     if (skip_opaque_world && !regs.blend_control[0].enable &&
         regs.viewports[0].xscale == 960.0f && regs.viewports[0].yscale == 540.0f) {
         return;
@@ -296,6 +301,58 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         }
     }
     const u32 this_draw_index = g_draw_index++;
+    {
+        const auto& key = pipeline->GetGraphicsKey();
+        const u64 ps_hash = key.stage_hashes[u32(Shader::SwStage::Fragment)];
+        static const bool log_draw_hash =
+            std::getenv("SHADPS4_LOG_DRAW_HASH") != nullptr;
+        if (log_draw_hash) {
+            static std::atomic<u32> draw_hash_log{0};
+            if (draw_hash_log.fetch_add(1, std::memory_order_relaxed) < 30000) {
+                LOG_INFO(Render_Vulkan,
+                         "DRAWLOG #{} ps={:#x} vs={:#x} n={} blend={} vp={}x{} cb={:#x} fmt={}",
+                         this_draw_index, ps_hash,
+                         key.stage_hashes[u32(Shader::SwStage::Vertex)], regs.num_indices,
+                         static_cast<u32>(regs.blend_control[0].enable),
+                         static_cast<f32>(regs.viewports[0].xscale),
+                         static_cast<f32>(regs.viewports[0].yscale),
+                         regs.color_buffers[0].Address(),
+                         static_cast<u32>(regs.color_buffers[0].info.format));
+            }
+        }
+    }
+    {
+        static const std::vector<u64> skip_ps = [] {
+            std::vector<u64> hashes;
+            const char* env = std::getenv("SHADPS4_SKIP_PS_HASH");
+            if (env == nullptr) {
+                return hashes;
+            }
+            std::string_view list{env};
+            while (!list.empty()) {
+                const auto comma = list.find(',');
+                const auto token = list.substr(0, comma);
+                hashes.push_back(std::strtoull(std::string{token}.c_str(), nullptr, 0));
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                list.remove_prefix(comma + 1);
+            }
+            return hashes;
+        }();
+        if (!skip_ps.empty() &&
+            std::ranges::find(skip_ps, u64{pipeline->GetGraphicsKey()
+                                                 .stage_hashes[u32(Shader::SwStage::Fragment)]}) !=
+                skip_ps.end()) {
+            static std::atomic<u32> skip_ps_log{0};
+            if (skip_ps_log.fetch_add(1, std::memory_order_relaxed) < 8) {
+                LOG_INFO(Render_Vulkan, "Skipping draw #{} ps={:#x}", this_draw_index,
+                         pipeline->GetGraphicsKey()
+                             .stage_hashes[u32(Shader::SwStage::Fragment)]);
+            }
+            return;
+        }
+    }
     if (this_draw_index >= g_skip_draw_start && this_draw_index <= g_skip_draw_end) {
         static std::atomic<u32> skipped_draws{0};
         if (skipped_draws.fetch_add(1) < 4) {
