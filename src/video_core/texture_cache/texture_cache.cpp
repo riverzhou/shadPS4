@@ -4,9 +4,14 @@
 #include <algorithm>
 #include <limits>
 #include <xxhash.h>
+#include <stb_image_write.h>
+#include <cstdio>
+#include <filesystem>
+#include <unordered_set>
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "common/path_util.h"
 #include "common/div_ceil.h"
 #include "common/hash.h"
 #include "core/emulator_settings.h"
@@ -1304,6 +1309,74 @@ void TextureCache::DeleteImage(ImageId image_id) {
         }
         slot_images.Erase(image_id);
     });
+}
+
+void TextureCache::DebugDumpImage(Image& image) {
+    static const char* filter = std::getenv("SHADPS4_DUMP_TEX_SIZE");
+    if (filter == nullptr) {
+        return;
+    }
+    u32 want_w = 0, want_h = 0;
+    if (std::getenv("SHADPS4_DUMP_TEX_LOG") != nullptr) {
+        static std::atomic<u32> seen{0};
+        if (seen.fetch_add(1) < 500) {
+            LOG_INFO(Render_Vulkan, "DUMPTEX seen {}x{} fmt={} bits={} block={}",
+                     image.info.size.width, image.info.size.height, vk::to_string(image.info.pixel_format),
+                     image.info.num_bits, static_cast<u32>(image.info.props.is_block));
+        }
+    }
+    if (std::sscanf(filter, "%ux%u", &want_w, &want_h) != 2 ||
+        image.info.size.width != want_w || image.info.size.height != want_h) {
+        return;
+    }
+    if (image.info.num_bits != 32 || image.info.props.is_block ||
+        image.info.pixel_format != vk::Format::eR8G8B8A8Unorm &&
+        image.info.pixel_format != vk::Format::eR8G8B8A8Srgb &&
+        image.info.pixel_format != vk::Format::eB8G8R8A8Unorm &&
+        image.info.pixel_format != vk::Format::eB8G8R8A8Srgb) {
+        return;
+    }
+    static std::unordered_set<VAddr> dumped;
+    if (!dumped.insert(image.info.guest_address).second) {
+        return;
+    }
+    const u32 w = image.info.size.width;
+    const u32 h = image.info.size.height;
+    const u64 size = u64{w} * h * 4;
+    Buffer readback{instance, 0, size, MemoryType::HostCached};
+    if (readback.mapped_data.empty()) {
+        return;
+    }
+    const vk::BufferImageCopy copy{
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {w, h, 1},
+    };
+    runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+    runtime.FlushBarriers();
+    scheduler.Finish();
+    readback.Invalidate(0, size);
+
+    std::vector<u8> rgba(size);
+    const bool bgra = image.info.pixel_format == vk::Format::eB8G8R8A8Unorm ||
+                      image.info.pixel_format == vk::Format::eB8G8R8A8Srgb;
+    const auto* src = readback.mapped_data.data();
+    for (u32 i = 0; i < w * h; ++i) {
+        rgba[i * 4 + 0] = bgra ? src[i * 4 + 2] : src[i * 4 + 0];
+        rgba[i * 4 + 1] = src[i * 4 + 1];
+        rgba[i * 4 + 2] = bgra ? src[i * 4 + 0] : src[i * 4 + 2];
+        rgba[i * 4 + 3] = src[i * 4 + 3];
+    }
+    const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) /
+                     "dumped_tex";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / fmt::format("{:x}_{}x{}.png", image.info.guest_address, w, h);
+    stbi_write_png(path.string().c_str(), w, h, 4, rgba.data(), w * 4);
+    LOG_INFO(Render_Vulkan, "Dumped texture {}x{} addr={:#x} -> {}", w, h,
+             image.info.guest_address, path.string());
 }
 
 } // namespace VideoCore

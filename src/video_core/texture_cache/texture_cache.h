@@ -179,6 +179,9 @@ public:
                                          AmdGpu::BorderColorBuffer border_color_base,
                                          bool is_depth);
 
+    /// Debug helper: dump an image to PNG when its extent matches a filter.
+    void DebugDumpImage(Image& image);
+
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];

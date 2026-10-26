@@ -1353,6 +1353,9 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
+            if (std::getenv("SHADPS4_DUMP_TEX_SIZE") != nullptr) {
+                texture_cache.DebugDumpImage(*image);
+            }
             if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
                 // If this image has an associated depth image, it's a stencil attachment.
                 // Redirect the access to the actual depth-stencil buffer.
