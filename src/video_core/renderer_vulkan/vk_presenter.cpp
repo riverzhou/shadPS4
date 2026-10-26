@@ -226,7 +226,10 @@ static float PqToNits(const float encoded) {
 
 static float ToneMapToSdrLinear(const float nits) {
     // Map absolute HDR luminance into SDR [0,1], preserving 100-nit white.
-    constexpr float sdr_white_nits = 100.0f;
+    static const float sdr_white_nits = [] {
+        const char* env = std::getenv("SHADPS4_TONEMAP_WHITE_NITS");
+        return env != nullptr ? std::strtof(env, nullptr) : 100.0f;
+    }();
     const float x = std::max(nits, 0.0f) / sdr_white_nits;
     const float mapped = (2.0f * x) / (1.0f + x);
     return std::clamp(mapped, 0.0f, 1.0f);
