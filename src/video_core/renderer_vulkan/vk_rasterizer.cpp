@@ -76,6 +76,7 @@ struct FrameDraw {
 std::array<FrameDraw, 2048> g_frame_draws{};
 u32 g_frame_draw_count{0};
 u32 g_draw_index{0};
+u64 g_index_frame{~0ull};
 u64 g_recorded_frame{~0ull};
 u32 g_dumped_frames{0};
 const u64 g_dump_after_s = [] {
@@ -276,9 +277,8 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     {
         const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
-        if (frame != g_recorded_frame) {
-            g_recorded_frame = frame;
-            g_frame_draw_count = 0;
+        if (frame != g_index_frame) {
+            g_index_frame = frame;
             g_draw_index = 0;
         }
     }
