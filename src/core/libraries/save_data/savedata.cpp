@@ -680,6 +680,28 @@ Error PS4_SYSV_ABI sceSaveDataClearProgress() {
     return Error::OK;
 }
 
+Error PS4_SYSV_ABI sceSaveDataCommit() {
+    if (!g_initialized) {
+        LOG_INFO(Lib_SaveData, "called without initialize");
+        return setNotInitializedError();
+    }
+
+    // The mounted save data is a host directory, so the title's file writes are already on
+    // disk; what a commit still has to do is push the save memory out, which otherwise only
+    // reaches disk from sceSaveDataSyncSaveDataMemory.
+    LOG_DEBUG(Lib_SaveData, "called");
+    for (auto& instance : g_mount_slots) {
+        if (!instance.has_value()) {
+            continue;
+        }
+        const u32 slot_id = static_cast<u32>(instance->GetSlotNum());
+        if (SaveMemory::IsSaveMemoryInitialized(slot_id)) {
+            SaveMemory::PersistMemory(slot_id);
+        }
+    }
+    return Error::OK;
+}
+
 int PS4_SYSV_ABI sceSaveDataCopy5() {
     LOG_ERROR(Lib_SaveData, "(STUBBED) called");
     return ORBIS_OK;
@@ -1768,6 +1790,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
                  sceSaveDataCheckSaveDataVersionLatest);
     LIB_FUNCTION("Wz-4JZfeO9g", "libSceSaveData", 1, "libSceSaveData", sceSaveDataClearProgress);
     LIB_FUNCTION("YbCO38BOOl4", "libSceSaveData", 1, "libSceSaveData", sceSaveDataCopy5);
+    LIB_FUNCTION("ie7qhZ4X0Cc", "libSceSaveData", 1, "libSceSaveData", sceSaveDataCommit);
     LIB_FUNCTION("kbIIP9aXK9A", "libSceSaveData", 1, "libSceSaveData", sceSaveDataCreateUploadData);
     LIB_FUNCTION("gW6G4HxBBXA", "libSceSaveData", 1, "libSceSaveData", sceSaveDataDebug);
     LIB_FUNCTION("bYCnxLexU7M", "libSceSaveData", 1, "libSceSaveData", sceSaveDataDebugCleanMount);

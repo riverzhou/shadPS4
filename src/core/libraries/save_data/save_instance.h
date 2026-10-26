@@ -128,6 +128,10 @@ public:
         return mounted;
     }
 
+    [[nodiscard]] int GetSlotNum() const noexcept {
+        return slot_num;
+    }
+
     [[nodiscard]] bool IsReadOnly() const noexcept {
         return read_only;
     }

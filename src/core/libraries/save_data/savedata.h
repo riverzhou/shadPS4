@@ -86,6 +86,7 @@ int PS4_SYSV_ABI sceSaveDataCheckSaveDataBroken();
 int PS4_SYSV_ABI sceSaveDataCheckSaveDataVersion();
 int PS4_SYSV_ABI sceSaveDataCheckSaveDataVersionLatest();
 Error PS4_SYSV_ABI sceSaveDataClearProgress();
+Error PS4_SYSV_ABI sceSaveDataCommit();
 int PS4_SYSV_ABI sceSaveDataCopy5();
 int PS4_SYSV_ABI sceSaveDataCreateUploadData();
 int PS4_SYSV_ABI sceSaveDataDebug();
