@@ -72,6 +72,10 @@ struct FrameDraw {
     s32 sy;
     u32 sw;
     u32 sh;
+    float vp_xscale;
+    float vp_xoffset;
+    float vp_yscale;
+    float vp_yoffset;
 };
 std::array<FrameDraw, 2048> g_frame_draws{};
 u32 g_frame_draw_count{0};
@@ -305,9 +309,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                     const auto& d = g_frame_draws[i];
                     LOG_INFO(Render_Vulkan,
                              "  draw#{} pipe={:#x} idx={} blend={} src={:#x} dst={:#x} "
-                             "op={:#x} fmt={} rt={}x{} scissor={},{} {}x{}",
+                             "op={:#x} fmt={} rt={}x{} scissor={},{} {}x{} vp={},{} {}x{}",
                              i, d.pipeline, d.indices, d.blend_enable, d.src_factor, d.dst_factor,
-                             d.blend_op, d.fmt, d.width, d.height, d.sx, d.sy, d.sw, d.sh);
+                             d.blend_op, d.fmt, d.width, d.height, d.sx, d.sy, d.sw, d.sh,
+                             d.vp_xoffset, d.vp_yoffset, d.vp_xscale, d.vp_yscale);
                 }
                 ++g_dumped_frames;
             }
@@ -332,6 +337,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                 .sy = sc.top_left_y,
                 .sw = sc.GetWidth(),
                 .sh = sc.GetHeight(),
+                .vp_xscale = regs.viewports[0].xscale,
+                .vp_xoffset = regs.viewports[0].xoffset,
+                .vp_yscale = regs.viewports[0].yscale,
+                .vp_yoffset = regs.viewports[0].yoffset,
             };
         }
     }
