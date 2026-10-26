@@ -1348,6 +1348,39 @@ void TextureCache::DebugDumpImage(Image& image) {
         image.info.size.width > 2048 || image.info.size.height > 2048) {
         return;
     }
+    if (image.info.pixel_format == vk::Format::eD32Sfloat ||
+        image.info.pixel_format == vk::Format::eD32SfloatS8Uint) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{w} * h * 4;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto base = dir / fmt::format("{:x}_{}x{}_depth", image.info.guest_address, w, h);
+        std::ofstream bin{base.string() + ".bin", std::ios::binary};
+        bin.write(reinterpret_cast<const char*>(readback.mapped_data.data()), size);
+        bin.close();
+        std::ofstream meta{base.string() + ".txt"};
+        meta << w << " " << h << " D32Sfloat" << "\n";
+        meta.close();
+        LOG_INFO(Render_Vulkan, "Dumped depth {}x{} addr={:#x}", w, h, image.info.guest_address);
+        return;
+    }
     if (image.info.props.is_block) {
         const u32 w = image.info.size.width;
         const u32 h = image.info.size.height;
