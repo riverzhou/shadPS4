@@ -55,7 +55,15 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         .addressModeU = LiverpoolToVK::ClampMode(sampler.clamp_x),
         .addressModeV = LiverpoolToVK::ClampMode(sampler.clamp_y),
         .addressModeW = LiverpoolToVK::ClampMode(sampler.clamp_z),
-        .mipLodBias = std::min(sampler.LodBias(), instance.MaxSamplerLodBias()),
+        .mipLodBias = std::getenv("SHADPS4_IGNORE_LOD_BIAS") != nullptr
+                           ? 0.0f
+                           : std::min(sampler.LodBias() +
+                                          [] {
+                                              const char* env = std::getenv("SHADPS4_LOD_BIAS");
+                                              return env != nullptr ? std::strtof(env, nullptr)
+                                                                    : 0.0f;
+                                          }(),
+                                      instance.MaxSamplerLodBias()),
         .anisotropyEnable = anisotropy_enable,
         .maxAnisotropy = max_anisotropy,
         // GCN compares per instruction; a plain read of a compare sampler is undefined in Vulkan.
