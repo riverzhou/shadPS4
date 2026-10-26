@@ -323,6 +323,15 @@ s32 PthreadMutex::Lock(const OrbisKernelTimespec* abstime, u64 usec) {
         [[unlikely]] {
         ret = POSIX_EINVAL;
     } else {
+        // A timed wait can park a title for just as long as an untimed one, and the freeze report
+        // is useless without the holder, so record it here as well.
+        if (contention_ms != 0) {
+            if (Pthread* owner = m_owner.load(std::memory_order_acquire); owner != nullptr) {
+                RecordMutexOwner(reinterpret_cast<u64>(this), name.c_str(), owner->tid.load(),
+                                 owner->name.c_str(),
+                                 reinterpret_cast<u64>(__builtin_return_address(0)));
+            }
+        }
         if (abstime == THR_RELTIME) {
             ret = m_lock.try_lock_for(std::chrono::microseconds(usec)) ? 0 : POSIX_ETIMEDOUT;
         } else {
