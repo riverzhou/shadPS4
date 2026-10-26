@@ -859,6 +859,16 @@ void TextureCache::RefreshImage(Image& image) {
         return;
     }
 
+    // A GPU-side write leaves the host image holding the fresh contents and the guest copy the
+    // stale one, so uploading here would re-detile the whole image only to overwrite good data
+    // with old data. Titles that render into a buffer and sample it as one large texture hit this
+    // path thousands of times per second (GT7's world map detiled 237 GB in one run this way).
+    if (False(image.flags & ImageFlagBits::CpuDirty) &&
+        False(image.flags & ImageFlagBits::MaybeCpuDirty)) {
+        image.flags &= ~ImageFlagBits::Dirty;
+        return;
+    }
+
     RENDERER_TRACE;
     TRACE_HINT(fmt::format("{:x}:{:x}", image.info.guest_address, image.info.guest_size));
 
