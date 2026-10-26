@@ -529,14 +529,6 @@ std::unique_ptr<IFile> MntPoints::Open(std::string_view guest_path,
     if (trace_writes && mode != Common::FS::FileAccessMode::Read) {
         LOG_INFO(Kernel_Fs, "write open: '{}' mode={}", guest_path, static_cast<int>(mode));
     }
-    // Debug-only: the boot display-settings check and the save-data path both live under
-    // /savedata; logging every open there (reads included) shows exactly which file the title
-    // looks for and whether it is ever created.
-    static const bool trace_savedata =
-        std::getenv("SHADPS4_TRACE_SAVEDATA_OPEN") != nullptr;
-    if (trace_savedata && guest_path.find("/savedata") != std::string_view::npos) {
-        LOG_INFO(Kernel_Fs, "savedata open: '{}' mode={}", guest_path, static_cast<int>(mode));
-    }
     const auto corrected = SanitizeGuestPath(guest_path);
     if (!corrected || *corrected == "/") {
         return nullptr;

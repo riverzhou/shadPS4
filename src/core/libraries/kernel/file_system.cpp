@@ -152,6 +152,14 @@ void ReleaseFlockState(Core::FileSys::File* file) {
 s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
     LOG_INFO(Kernel_Fs, "path = {} flags = {:#x} mode = {:#o}", raw_path, flags, mode);
 
+    // The save-data investigation needs the opens that fail too: the boot display-settings check
+    // is a read-only open of a file that does not exist yet, and it never reaches the mount.
+    static const bool trace_savedata = std::getenv("SHADPS4_TRACE_SAVEDATA_OPEN") != nullptr;
+    if (trace_savedata && std::string_view{raw_path}.find("/savedata") != std::string_view::npos) {
+        LOG_INFO(Kernel_Fs, "savedata open: path = {} flags = {:#x} mode = {:#o}", raw_path,
+                 flags, mode);
+    }
+
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
 
