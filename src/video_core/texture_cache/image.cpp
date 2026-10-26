@@ -166,6 +166,19 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         return;
     }
 
+    if (std::getenv("SHADPS4_LOG_IMAGE_TYPE") != nullptr) {
+        static std::atomic<u32> logged{0};
+        if ((info.size.width == 512 && info.size.height == 256) ||
+            (info.size.width == 1024 && info.size.height == 256)) {
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 80) {
+                LOG_INFO(Render_Vulkan,
+                         "IMGTYPE addr={:#x} {}x{} layers={} type={} fmt={}",
+                         info.guest_address, info.size.width, info.size.height,
+                         info.resources.layers, static_cast<u32>(info.type),
+                         vk::to_string(info.pixel_format));
+            }
+        }
+    }
     image_uid = global_image_uid.Next();
     vk::ImageCreateFlags flags{vk::ImageCreateFlagBits::eMutableFormat |
                                vk::ImageCreateFlagBits::eExtendedUsage};
