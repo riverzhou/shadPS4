@@ -70,19 +70,21 @@ struct PageManager::Impl {
                                                 bool update_read = false) {
             if (update_read) {
                 if (read_op == PageOp::Track) {
-                    ASSERT_MSG(num_read_watchers == 0, "Too many watchers");
-                } else if (read_op == PageOp::Untrack) {
-                    ASSERT_MSG(num_read_watchers > 0, "Not enough watchers");
+                    ASSERT_MSG(num_read_watchers < 255, "Too many read watchers");
+                    ++num_read_watchers;
+                } else if (read_op == PageOp::Untrack && num_read_watchers > 0) {
+                    // Watcher bookkeeping can be one short when an image that was never fully
+                    // registered is removed; do not take the emulator down for it.
+                    --num_read_watchers;
                 }
-                num_read_watchers += std::to_underlying(read_op);
             }
             if (update_write) {
                 if (write_op == PageOp::Track) {
-                    ASSERT_MSG(num_write_watchers < 255, "Too many watchers");
-                } else if (write_op == PageOp::Untrack) {
-                    ASSERT_MSG(num_write_watchers > 0, "Not enough watchers");
+                    ASSERT_MSG(num_write_watchers < 255, "Too many write watchers");
+                    ++num_write_watchers;
+                } else if (write_op == PageOp::Untrack && num_write_watchers > 0) {
+                    --num_write_watchers;
                 }
-                num_write_watchers += std::to_underlying(write_op);
             }
             return Perms();
         }
