@@ -22,6 +22,31 @@ namespace Libraries::VideoOut {
 
 static std::unique_ptr<VideoOutDriver> driver;
 
+namespace {
+// Debug-only: name the video-out call that does not return instead of inferring it from thread
+// state. SHADPS4_LOG_VIDEOOUT_SLOW_MS=500 reports every call above the threshold.
+struct VideoOutCallWatch {
+    const char* name;
+    std::chrono::steady_clock::time_point start;
+    explicit VideoOutCallWatch(const char* n) : name{n}, start{std::chrono::steady_clock::now()} {}
+    ~VideoOutCallWatch() {
+        static const u64 threshold_ms = [] {
+            const char* env = std::getenv("SHADPS4_LOG_VIDEOOUT_SLOW_MS");
+            return env != nullptr ? std::strtoull(env, nullptr, 10) : u64{0};
+        }();
+        if (threshold_ms == 0) {
+            return;
+        }
+        const auto ms = static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - start)
+                                             .count());
+        if (ms >= threshold_ms) {
+            LOG_WARNING(Lib_VideoOut, "{} took {} ms", name, ms);
+        }
+    }
+};
+} // namespace
+
 void PS4_SYSV_ABI sceVideoOutSetBufferAttribute(BufferAttribute* attribute, PixelFormat pixelFormat,
                                                 u32 tilingMode, u32 aspectRatio, u32 width,
                                                 u32 height, u32 pitchInPixel) {
@@ -127,6 +152,7 @@ s32 PS4_SYSV_ABI sceVideoOutDeleteVblankEvent(Kernel::OrbisKernelEqueue eq, s32 
 
 s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* const* addresses,
                                             s32 bufferNum, const BufferAttribute* attribute) {
+    VideoOutCallWatch watch{"RegisterBuffers"};
     if (!addresses || !attribute) {
         LOG_ERROR(Lib_VideoOut, "Addresses are null");
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
@@ -142,6 +168,7 @@ s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* co
 }
 
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
+    VideoOutCallWatch watch{"SetFlipRate"};
     LOG_TRACE(Lib_VideoOut, "called");
     driver->GetPort(handle)->flip_rate = rate;
     return ORBIS_OK;
@@ -170,6 +197,7 @@ u64 LastFlipMs() {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode, s64 flipArg) {
+    VideoOutCallWatch watch{"SubmitFlip"};
     g_last_flip_ms.store(NowMs(), std::memory_order_relaxed);
     // Count presented frames for the tools: at one frame per second a wall-clock script drifts
     // against the title's pages, while replaying by presented frames stays in step.
@@ -214,6 +242,7 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetEventId(const Kernel::OrbisKernelEvent* ev) {
+    VideoOutCallWatch watch{"GetEventId"};
     if (ev == nullptr) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
     }
@@ -271,6 +300,7 @@ s32 PS4_SYSV_ABI sceVideoOutGetEventCount(const Kernel::OrbisKernelEvent* ev) {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status) {
+    VideoOutCallWatch watch{"GetFlipStatus"};
     if (!status) {
         LOG_ERROR(Lib_VideoOut, "Flip status is null");
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
@@ -298,6 +328,7 @@ s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status) {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetVblankStatus(int handle, SceVideoOutVblankStatus* status) {
+    VideoOutCallWatch watch{"GetVblankStatus"};
     if (status == nullptr) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
     }
@@ -390,6 +421,7 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
 
 s32 PS4_SYSV_ABI sceVideoOutGetDeviceCapabilityInfo(
     s32 handle, SceVideoOutDeviceCapabilityInfo* pDeviceCapabilityInfo) {
+    VideoOutCallWatch watch{"GetDeviceCapabilityInfo"};
     pDeviceCapabilityInfo->capability = 0;
     if (presenter->IsHDRSupported()) {
         auto& game_info = Common::ElfInfo::Instance();
