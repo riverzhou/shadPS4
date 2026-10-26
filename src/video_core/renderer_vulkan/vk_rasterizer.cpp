@@ -1302,7 +1302,9 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 }
                 return hashes;
             }();
-            if (std::ranges::find(identity_hashes, u64{stage.pgm_hash}) != identity_hashes.end()) {
+            static const bool identity_all = std::getenv("SHADPS4_IDENTITY_MAPPING_ALL") != nullptr;
+            if (identity_all ||
+                std::ranges::find(identity_hashes, u64{stage.pgm_hash}) != identity_hashes.end()) {
                 desc.view_info.mapping = AmdGpu::IdentityMapping;
             }
 
@@ -1310,6 +1312,20 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 const char* env = std::getenv("SHADPS4_LOG_TEX_BIND");
                 return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
             }();
+            static const bool bind_log_all = std::getenv("SHADPS4_LOG_TEX_BIND_ALL") != nullptr;
+            if (bind_log_all) {
+                static std::atomic<u32> all_count{0};
+                const auto m = desc.view_info.mapping;
+                if (all_count.fetch_add(1, std::memory_order_relaxed) < 3000) {
+                    LOG_INFO(Render_Vulkan,
+                             "BINDALL hash={:#x} {}x{} dfmt={} map={}{}{}{} idx={} depth={}",
+                             stage.pgm_hash, tsharp.width + 1, tsharp.height + 1,
+                             static_cast<u32>(data_fmt), static_cast<u32>(m.r),
+                             static_cast<u32>(m.g), static_cast<u32>(m.b),
+                             static_cast<u32>(m.a), liverpool->regs.num_indices,
+                             static_cast<u32>(liverpool->regs.depth_control.depth_enable));
+                }
+            }
             if (bind_log_addr != 0 && tsharp.Address() == bind_log_addr) {
                 static std::atomic<u32> bind_log_count{0};
                 if (bind_log_count.fetch_add(1) < 80) {
