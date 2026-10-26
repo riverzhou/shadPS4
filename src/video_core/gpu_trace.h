@@ -5,6 +5,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
 #include "common/logging/log.h"
 #include "common/types.h"
 
@@ -186,6 +192,44 @@ inline void DumpSubmission(const char* reason, u32 scheduler, u32 which, u32 max
 inline void DumpSubmissionByTick(const char* reason, u32 scheduler, u64 tick,
                                  u32 max_lines = 65536) {
     DumpSubmissionRange(reason, scheduler, 0, tick, max_lines);
+}
+
+// Debug-only: dump the most recent submission at the given seconds after the first present, so
+// an ordinary frame (a menu that draws nothing, for example) can be inspected without waiting for
+// a hang. SHADPS4_GPU_TRACE_DUMP_AT=200,260
+inline void StartDumpAtTimer() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* env = std::getenv("SHADPS4_GPU_TRACE_DUMP_AT");
+        if (env == nullptr) {
+            return;
+        }
+        std::vector<u64> times;
+        std::string_view rest{env};
+        while (!rest.empty()) {
+            const auto comma = rest.find(',');
+            const auto token = rest.substr(0, comma);
+            const u64 seconds = std::strtoull(std::string{token}.c_str(), nullptr, 10);
+            if (seconds != 0) {
+                times.push_back(seconds);
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            rest.remove_prefix(comma + 1);
+        }
+        if (times.empty()) {
+            return;
+        }
+        std::thread{[times] {
+            const auto start = std::chrono::steady_clock::now();
+            for (const u64 seconds : times) {
+                std::this_thread::sleep_until(start + std::chrono::seconds(seconds));
+                DumpSubmission("dump-at", 0, 0, 4096);
+            }
+        }}.detach();
+        LOG_INFO(Render, "GPU trace dump scheduled at {} points", times.size());
+    });
 }
 
 } // namespace VideoCore::GpuTrace

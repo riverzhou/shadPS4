@@ -847,6 +847,7 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    VideoCore::GpuTrace::StartDumpAtTimer();
     static const bool watchdog_requested = std::getenv("SHADPS4_GPU_WATCHDOG") != nullptr;
     static bool watchdog_started = false;
     if (watchdog_requested && !watchdog_started) {
