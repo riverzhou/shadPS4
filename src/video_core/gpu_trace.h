@@ -225,7 +225,11 @@ inline void StartDumpAtTimer() {
             const auto start = std::chrono::steady_clock::now();
             for (const u64 seconds : times) {
                 std::this_thread::sleep_until(start + std::chrono::seconds(seconds));
-                DumpSubmission("dump-at", 0, 0, 4096);
+                // Every scheduler has its own timeline; a frame can be empty on one and carry all
+                // the draws on another, so a dump that only looks at scheduler 0 can mislead.
+                for (u32 scheduler = 0; scheduler < 3; ++scheduler) {
+                    DumpSubmission("dump-at", scheduler, 0, 4096);
+                }
             }
         }}.detach();
         LOG_INFO(Render, "GPU trace dump scheduled at {} points", times.size());

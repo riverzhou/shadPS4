@@ -181,6 +181,9 @@ int PS4_SYSV_ABI sceAppContentAddcontUnmount(OrbisAppContentMountPoint* mount_po
 }
 
 int PS4_SYSV_ABI sceAppContentAppParamGetInt(OrbisAppContentAppParamId paramId, s32* out_value) {
+    // Debug-only: a title that polls an app parameter waits for a value this HLE returns from
+    // param.sfo, so an unexplained stall needs the id and the exact value it keeps receiving.
+    static const bool trace_param = std::getenv("SHADPS4_TRACE_APP_PARAM") != nullptr;
     if (out_value == nullptr)
         return ORBIS_APP_CONTENT_ERROR_PARAMETER;
     auto* param_sfo = Common::Singleton<PSF>::Instance();
@@ -206,6 +209,14 @@ int PS4_SYSV_ABI sceAppContentAppParamGetInt(OrbisAppContentAppParamId paramId, 
         return ORBIS_APP_CONTENT_ERROR_PARAMETER;
     }
     *out_value = value.value_or(0);
+    if (trace_param) {
+        static std::atomic<u32> logged{0};
+        const u32 n = logged.fetch_add(1, std::memory_order_relaxed);
+        if (n < 16 || n % 2000 == 0) {
+            LOG_INFO(Lib_AppContent, "AppParamGetInt paramId={} -> {} (call {})", static_cast<s32>(paramId),
+                     *out_value, n + 1);
+        }
+    }
     return ORBIS_OK;
 }
 

@@ -934,6 +934,10 @@ static void DispatchPendingNpStateCallbacks() {
     }
 
     for (auto& event : pending_events) {
+        // A title that never receives its first state callback can sit in a "still signing in"
+        // state forever, so make the delivery visible.
+        LOG_INFO(Lib_NpManager, "state callback: user={} state={}", event.user_id,
+                 static_cast<s32>(event.state));
         if (legacy_callback.func != nullptr) {
             legacy_callback.func(event.user_id, event.state,
                                  event.has_np_id ? &event.np_id : nullptr,

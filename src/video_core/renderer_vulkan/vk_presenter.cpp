@@ -1196,6 +1196,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             LOG_CRITICAL(Render_Vulkan,
                          "GPU stall detected: last completed checkpoint={} (stuck {} frames)",
                          last_reached, stuck_frames);
+            // Name the command the GPU was last seen executing: the op ring alone says what was
+            // submitted, not what actually ran.
+            instance.LogCheckpoints(instance.GetGraphicsQueue(), "gpu stall");
+            // The tail of the whole submission (not just the last 256 ops) is what names the
+            // command the GPU stopped on.
+            for (u32 scheduler = 0; scheduler < 3; ++scheduler) {
+                VideoCore::GpuTrace::DumpSubmission("gpu stall", scheduler, 0, 65536);
+            }
             VideoCore::GpuTrace::Dump("gpu stall");
         }
     }
