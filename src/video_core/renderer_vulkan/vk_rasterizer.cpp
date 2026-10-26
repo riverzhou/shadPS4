@@ -264,6 +264,11 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     if (skip_quads && regs.num_indices <= 8 && regs.blend_control[0].enable) {
         return;
     }
+    static const bool skip_opaque_world = std::getenv("SHADPS4_SKIP_OPAQUE_WORLD") != nullptr;
+    if (skip_opaque_world && !regs.blend_control[0].enable &&
+        regs.viewports[0].xscale == 960.0f && regs.viewports[0].yscale == 540.0f) {
+        return;
+    }
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline();
     const u32 num_instances = regs.num_instances.NumInstances();
     VideoCore::GpuTrace::Record(is_indexed ? VideoCore::GpuTrace::Op::DrawIndexed
