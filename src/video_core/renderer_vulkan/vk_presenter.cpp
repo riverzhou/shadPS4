@@ -1216,6 +1216,17 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
         Rasterizer::NotifyFlip();
+        static const bool dump_at_present =
+            std::getenv("SHADPS4_DUMP_TEX_AT_PRESENT") != nullptr;
+        if (dump_at_present) {
+            static std::atomic<bool> dumped{false};
+            static const auto start = std::chrono::steady_clock::now();
+            if (!dumped.load(std::memory_order_relaxed) &&
+                std::chrono::steady_clock::now() - start > std::chrono::seconds(100)) {
+                dumped.store(true, std::memory_order_relaxed);
+                rasterizer->GetTextureCache().DebugDumpAll();
+            }
+        }
     }
 }
 
