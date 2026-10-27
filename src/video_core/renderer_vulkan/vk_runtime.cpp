@@ -730,7 +730,7 @@ void Runtime::ClampHistoryImage(VideoCore::Image* image) {
         .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
     };
     cmd.blitImage(image->GetImage(), vk::ImageLayout::eTransferSrcOptimal, temp,
-                  vk::ImageLayout::eTransferDstOptimal, to_temp, vk::Filter::eLinear);
+                  vk::ImageLayout::eTransferDstOptimal, to_temp, vk::Filter::eNearest);
 
     const vk::ImageMemoryBarrier2 dst_to_src{
         .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
@@ -765,7 +765,7 @@ void Runtime::ClampHistoryImage(VideoCore::Image* image) {
         .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
     };
     cmd.blitImage(temp, vk::ImageLayout::eTransferSrcOptimal, image->GetImage(),
-                  vk::ImageLayout::eTransferDstOptimal, to_history, vk::Filter::eLinear);
+                  vk::ImageLayout::eTransferDstOptimal, to_history, vk::Filter::eNearest);
 
     Transit(image, vk::ImageLayout::eShaderReadOnlyOptimal,
             vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
