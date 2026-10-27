@@ -687,6 +687,11 @@ void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRang
         .baseArrayLayer = range.base.layer,
         .layerCount = range.extent.layers,
     };
+    if (std::getenv("SHADPS4_LOG_CLEAR_IMAGE") != nullptr) {
+        LOG_INFO(Render_Vulkan, "CLEARIMG addr={:#x} value={:08x},{:08x},{:08x},{:08x}",
+                 dst->info.guest_address, clear_value.color.uint32[0], clear_value.color.uint32[1],
+                 clear_value.color.uint32[2], clear_value.color.uint32[3]);
+    }
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.clearColorImage(dst->GetImage(), vk::ImageLayout::eTransferDstOptimal, clear_value.color,
                            vk_range);
