@@ -291,6 +291,10 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
 }
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
+    if (std::getenv("SHADPS4_LOG_COPY") != nullptr) {
+        LOG_INFO(Render_Vulkan, "COPYIMG src={:#x} dst={:#x} {}x{}", src->info.guest_address,
+                 dst->info.guest_address, src->info.size.width, src->info.size.height);
+    }
     // Debug switch: skip all copy work to see whether guest copies are what hangs the GPU.
     static const bool no_copies = std::getenv("SHADPS4_NO_COPIES") != nullptr;
     if (no_copies) {
@@ -528,6 +532,10 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
 }
 
 void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
+    if (std::getenv("SHADPS4_LOG_COPY") != nullptr) {
+        LOG_INFO(Render_Vulkan, "COPYCD src={:#x} dst={:#x} {}x{}", src->info.guest_address,
+                 dst->info.guest_address, src->info.size.width, src->info.size.height);
+    }
     if (src->info.num_samples == 1 && dst->info.num_samples == 1) {
         if ((instance.IsMaintenance8Supported() ||
              src->info.props.is_depth == dst->info.props.is_depth) &&
