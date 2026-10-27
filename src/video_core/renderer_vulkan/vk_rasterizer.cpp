@@ -308,6 +308,22 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         }
     }
     const u32 this_draw_index = g_draw_index++;
+    if (std::getenv("SHADPS4_LOG_OVERLAY_C") != nullptr &&
+        pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Fragment)] ==
+            0xdb3febca87e) {
+        static std::atomic<u32> overlay_log{0};
+        if (overlay_log.fetch_add(1, std::memory_order_relaxed) < 8) {
+            const auto& bc = regs.blend_control[0];
+            LOG_INFO(Render_Vulkan,
+                     "OVC blend enable={} src={} dst={} func={} asrc={} adst={} afunc={}",
+                     bc.enable, static_cast<u32>(bc.color_src_factor),
+                     static_cast<u32>(bc.color_dst_factor), static_cast<u32>(bc.color_func),
+                     static_cast<u32>(bc.alpha_src_factor),
+                     static_cast<u32>(bc.alpha_dst_factor), static_cast<u32>(bc.alpha_func));
+            LOG_INFO(Render_Vulkan, "OVC cb0={:#x} fmt={}", regs.color_buffers[0].Address(),
+                     static_cast<u32>(regs.color_buffers[0].info.format));
+        }
+    }
     if (std::getenv("SHADPS4_LOG_SMALL_VP") != nullptr &&
         regs.viewports[0].xscale > 32.0f && regs.viewports[0].xscale <= 512.0f) {
         static std::atomic<u32> small_vp_log{0};
