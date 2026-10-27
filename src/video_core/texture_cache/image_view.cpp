@@ -93,6 +93,17 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::De
 ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info_,
                      const Image& image)
     : info{info_} {
+    static const VAddr log_view_addr = [] {
+        const char* env = std::getenv("SHADPS4_LOG_VIEW_ADDR");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+    }();
+    if (log_view_addr != 0 && image.info.guest_address == log_view_addr) {
+        LOG_INFO(Render_Vulkan,
+                 "VIEWADDR addr={:#x} imageType={} viewType={} imageLayers={} viewLayers={}",
+                 image.info.guest_address, static_cast<u32>(image.info.type),
+                 static_cast<u32>(info.type), image.info.resources.layers,
+                 info.range.extent.layers);
+    }
     // The image may have fewer levels than the guest view asks for, see ImageInfo.
     const u32 image_levels = image.info.resources.levels;
     const u32 base_level = std::min<u32>(info.range.base.level, image_levels - 1);

@@ -166,6 +166,17 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         return;
     }
 
+    static const VAddr log_addr = [] {
+        const char* env = std::getenv("SHADPS4_LOG_IMAGE_ADDR");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+    }();
+    if (log_addr != 0 && info.guest_address == log_addr) {
+        LOG_INFO(Render_Vulkan,
+                 "IMGADDR addr={:#x} {}x{} layers={} levels={} type={} fmt={}",
+                 info.guest_address, info.size.width, info.size.height,
+                 info.resources.layers, info.resources.levels,
+                 static_cast<u32>(info.type), vk::to_string(info.pixel_format));
+    }
     if (std::getenv("SHADPS4_LOG_IMAGE_TYPE") != nullptr) {
         static std::atomic<u32> logged{0};
         if ((info.size.width == 512 && info.size.height == 256) ||
