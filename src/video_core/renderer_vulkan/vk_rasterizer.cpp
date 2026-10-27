@@ -358,8 +358,11 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
             static std::atomic<u32> draw_hash_log{0};
             if (draw_hash_log.fetch_add(1, std::memory_order_relaxed) < 30000) {
                 LOG_INFO(Render_Vulkan,
-                         "DRAWLOG #{} ps={:#x} vs={:#x} n={} blend={} vp={}x{} cb={:#x} fmt={}",
+                         "DRAWLOG #{} ps={:#x} prog={:#x} vs={:#x} n={} blend={} vp={}x{} cb={:#x} fmt={}",
                          this_draw_index, ps_hash,
+                         ps_hash != 0
+                             ? u64{pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash}
+                             : 0ull,
                          key.stage_hashes[u32(Shader::SwStage::Vertex)], regs.num_indices,
                          static_cast<u32>(regs.blend_control[0].enable),
                          static_cast<f32>(regs.viewports[0].xscale),
