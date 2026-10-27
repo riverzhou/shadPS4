@@ -308,6 +308,24 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         }
     }
     const u32 this_draw_index = g_draw_index++;
+    if (std::getenv("SHADPS4_LOG_ALL_CB") != nullptr) {
+        static std::atomic<u32> cb_log{0};
+        if (cb_log.fetch_add(1, std::memory_order_relaxed) < 5000) {
+            const u32 prog = pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Fragment)] != 0
+                                 ? u32(pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash)
+                                 : 0;
+            for (u32 i = 0; i < AmdGpu::NUM_COLOR_BUFFERS; ++i) {
+                const auto& cb = regs.color_buffers[i];
+                if (cb.Address() != 0) {
+                    LOG_INFO(Render_Vulkan, "ALLCB #{} ps={:#x} prog={:#x} i={} addr={:#x} fmt={}",
+                             this_draw_index,
+                             pipeline->GetGraphicsKey()
+                                 .stage_hashes[u32(Shader::SwStage::Fragment)],
+                             prog, i, cb.Address(), static_cast<u32>(cb.info.format));
+                }
+            }
+        }
+    }
     {
         static const VAddr log_target_addr = [] {
             const char* env = std::getenv("SHADPS4_LOG_TARGET_ADDR");
