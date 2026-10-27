@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/debug.h"
+#include "common/path_util.h"
+#include <stb_image_write.h>
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -57,6 +59,11 @@ static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
 
 namespace {
 std::atomic<u64> g_flip_frame{0};
+std::unique_ptr<VideoCore::Buffer> g_dump_buffer;
+u32 g_dump_w{0};
+u32 g_dump_h{0};
+vk::Format g_dump_fmt{};
+std::atomic<bool> g_dump_ready{false};
 
 struct FrameDraw {
     u64 pipeline;
@@ -552,9 +559,35 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         const auto elapsed = std::chrono::steady_clock::now() - g_process_start;
         if (!requested.load(std::memory_order_relaxed) &&
             elapsed > std::chrono::seconds(100)) {
-            requested.store(true, std::memory_order_relaxed);
-            pending_dump_addr.store(regs.color_buffers[0].Address(), std::memory_order_relaxed);
-            LOG_INFO(Render_Vulkan, "DUMPAFTER requested addr={:#x}", pending_dump_addr.load());
+            const auto& cb = regs.color_buffers[0];
+            const VAddr addr = cb.Address();
+            const u32 w = cb.Pitch();
+            const u32 h = cb.Height();
+            const auto id = texture_cache.FindImageFromRange(addr, u64{w} * h * 4, false);
+            if (id) {
+                requested.store(true, std::memory_order_relaxed);
+                auto& image = texture_cache.GetImage(id);
+                g_dump_w = w;
+                g_dump_h = h;
+                g_dump_fmt = image.info.pixel_format;
+                g_dump_buffer = std::make_unique<VideoCore::Buffer>(
+                    instance, 0, u64{w} * h * 4, VideoCore::MemoryType::HostCached);
+                scheduler.EndRendering();
+                const vk::BufferImageCopy copy{
+                    .bufferOffset = 0,
+                    .bufferRowLength = 0,
+                    .bufferImageHeight = 0,
+                    .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                    .imageOffset = {0, 0, 0},
+                    .imageExtent = {w, h, 1},
+                };
+                runtime.DownloadImage(&image, g_dump_buffer.get(), std::span{&copy, 1});
+                runtime.FlushBarriers();
+                g_dump_ready.store(true, std::memory_order_relaxed);
+                LOG_INFO(Render_Vulkan,
+                         "DUMPAFTER staged addr={:#x} {}x{} fmt={}", addr, w, h,
+                         vk::to_string(g_dump_fmt));
+            }
         }
     }
 
@@ -2321,18 +2354,40 @@ u32 Rasterizer::GetGpuCommandProcessorThreadId() {
 #endif
 
 void Rasterizer::DebugDumpPending() {
-    const VAddr addr = pending_dump_addr.exchange(0, std::memory_order_relaxed);
-    if (addr == 0) {
+    if (!g_dump_ready.exchange(false, std::memory_order_relaxed) || !g_dump_buffer) {
         return;
     }
     instance.GetDevice().waitIdle();
-    const auto id = texture_cache.FindImageFromRange(addr, 1, false);
-    if (id) {
-        texture_cache.DebugDumpImage(texture_cache.GetImage(id), true);
-        LOG_INFO(Render_Vulkan, "DUMPAFTER dumped addr={:#x} id={}", addr, id.index);
-    } else {
-        LOG_INFO(Render_Vulkan, "DUMPAFTER no image for addr={:#x}", addr);
+    const u64 size = u64{g_dump_w} * g_dump_h * 4;
+    g_dump_buffer->Invalidate(0, size);
+    const auto* src = g_dump_buffer->mapped_data.data();
+    std::vector<u8> rgba(size);
+    const bool b10 = g_dump_fmt == vk::Format::eA2B10G10R10UnormPack32;
+    for (u32 i = 0; i < g_dump_w * g_dump_h; ++i) {
+        u32 v;
+        std::memcpy(&v, src + i * 4, 4);
+        if (b10) {
+            auto enc = [](u32 c) {
+                return u8(std::pow(float(c) / 1023.0f, 1.0f / 2.2f) * 255.0f + 0.5f);
+            };
+            rgba[i * 4 + 0] = enc(v & 0x3ff);
+            rgba[i * 4 + 1] = enc((v >> 10) & 0x3ff);
+            rgba[i * 4 + 2] = enc((v >> 20) & 0x3ff);
+            rgba[i * 4 + 3] = 255;
+        } else {
+            rgba[i * 4 + 0] = src[i * 4 + 2];
+            rgba[i * 4 + 1] = src[i * 4 + 1];
+            rgba[i * 4 + 2] = src[i * 4 + 0];
+            rgba[i * 4 + 3] = src[i * 4 + 3];
+        }
     }
+    const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / fmt::format("staged_{}x{}_{}.png", g_dump_w, g_dump_h,
+                                        vk::to_string(g_dump_fmt));
+    stbi_write_png(path.string().c_str(), g_dump_w, g_dump_h, 4, rgba.data(), g_dump_w * 4);
+    LOG_INFO(Render_Vulkan, "DUMPAFTER saved {}", path.string());
+    g_dump_buffer.reset();
 }
 
 } // namespace Vulkan
