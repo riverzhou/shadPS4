@@ -670,6 +670,111 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
+    if (const char* sample_env = std::getenv("SHADPS4_SPV_OUT_SAMPLE")) {
+        const char* pgm_env = std::getenv("SHADPS4_SPV_OUT_PGM");
+        const u64 want_pgm = pgm_env != nullptr ? std::strtoull(pgm_env, nullptr, 0) : 0;
+        if (want_pgm != 0 && info.pgm_hash == want_pgm) {
+            const u32 sample_id = std::strtoul(sample_env, nullptr, 0);
+            std::unordered_map<u32, u32> constants;
+            std::unordered_map<u32, u32> pointee;
+            std::unordered_map<u32, u32> chain_base;
+            std::unordered_map<u32, u32> chain_type;
+            std::vector<u32> store_pos;
+            u32 sample_pos = 0, sample_type = 0, first_func = 0, first_label = 0, block = 0;
+            for (u32 i = 5; i < spv.size();) {
+                const u32 op = spv[i] & 0xffff;
+                const u32 count = spv[i] >> 16;
+                if (op == 54 && first_func == 0) {
+                    first_func = i;
+                } else if (op == 248) {
+                    block = spv[i + 1];
+                    if (first_label == 0 && first_func != 0) first_label = i;
+                } else if (op == 43 && count >= 4) {
+                    constants[spv[i + 2]] = spv[i + 3];
+                } else if (op == 32 && count >= 4) {
+                    pointee[spv[i + 1]] = spv[i + 3];
+                } else if (op == 65 && count >= 5) {
+                    chain_base[spv[i + 2]] = spv[i + 3];
+                    chain_type[spv[i + 2]] = spv[i + 1];
+                } else if (op >= 87 && op <= 100 && spv[i + 2] == sample_id) {
+                    sample_pos = i;
+                    sample_type = spv[i + 1];
+                } else if (op == 62 && count >= 3) {
+                    const auto it = chain_base.find(spv[i + 1]);
+                    if (it != chain_base.end() && (it->second == 55 || it->second == 56)) {
+                        store_pos.push_back(i);
+                    }
+                }
+                i += count;
+            }
+            if (sample_pos != 0 && first_func != 0 && first_label != 0 && !store_pos.empty()) {
+                const u32 output_ptr_type = chain_type[spv[store_pos[0] + 1]];
+                const u32 float_type = pointee[output_ptr_type];
+                const u32 func_ptr_type = spv[3]++;
+                const u32 var_id = spv[3]++;
+                const u32 load_id = spv[3]++;
+                std::vector<u32> patched(spv.begin(), spv.begin() + 5);
+                bool type_done = false, var_done = false, load_done = false;
+                const u32 first_store = store_pos.front();
+                for (u32 i = 5; i < spv.size();) {
+                    const u32 op = spv[i] & 0xffff;
+                    const u32 count = spv[i] >> 16;
+                    if (i == first_func && !type_done) {
+                        patched.push_back((4u << 16) | 32);
+                        patched.push_back(func_ptr_type);
+                        patched.push_back(7);
+                        patched.push_back(sample_type);
+                        type_done = true;
+                    }
+                    if (i == first_label && !var_done) {
+                        patched.insert(patched.end(), spv.begin() + i, spv.begin() + i + count);
+                        patched.push_back((4u << 16) | 59);
+                        patched.push_back(func_ptr_type);
+                        patched.push_back(var_id);
+                        patched.push_back(7);
+                        var_done = true;
+                        i += count;
+                        continue;
+                    }
+                    if (i == sample_pos) {
+                        patched.insert(patched.end(), spv.begin() + i, spv.begin() + i + count);
+                        patched.push_back((3u << 16) | 62);
+                        patched.push_back(var_id);
+                        patched.push_back(sample_id);
+                        i += count;
+                        continue;
+                    }
+                    if (i == first_store && !load_done) {
+                        patched.push_back((4u << 16) | 61);
+                        patched.push_back(sample_type);
+                        patched.push_back(load_id);
+                        patched.push_back(var_id);
+                        load_done = true;
+                    }
+                    const auto it = op == 62 ? chain_base.find(spv[i + 1]) : chain_base.end();
+                    if (it != chain_base.end() && (it->second == 55 || it->second == 56)) {
+                        const u32 component = constants.count(spv[i + 4]) ? constants[spv[i + 4]] & 3 : 0;
+                        const u32 tmp_id = spv[3]++;
+                        patched.push_back((5u << 16) | 81);
+                        patched.push_back(float_type);
+                        patched.push_back(tmp_id);
+                        patched.push_back(load_id);
+                        patched.push_back(component);
+                        patched.insert(patched.end(), spv.begin() + i, spv.begin() + i + count);
+                        patched.back() = tmp_id;
+                        i += count;
+                        continue;
+                    }
+                    patched.insert(patched.end(), spv.begin() + i, spv.begin() + i + count);
+                    i += count;
+                }
+                spv = std::move(patched);
+                LOG_INFO(Render_Vulkan, "SPV output patched to sample {} via function variable in {:#x}",
+                         sample_id, info.pgm_hash);
+            }
+        }
+    }
+
     if (const char* want = std::getenv("SHADPS4_DUMP_PS_PGM")) {
         if (std::strtoull(want, nullptr, 0) == info.pgm_hash) {
             const auto path = Common::FS::GetUserPath(Common::FS::PathType::ShaderDir) /
