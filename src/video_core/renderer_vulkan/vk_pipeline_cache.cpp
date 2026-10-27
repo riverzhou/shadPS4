@@ -670,6 +670,18 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
+    if (const char* want = std::getenv("SHADPS4_DUMP_PS_PGM")) {
+        if (std::strtoull(want, nullptr, 0) == info.pgm_hash) {
+            const auto path = Common::FS::GetUserPath(Common::FS::PathType::ShaderDir) /
+                              fmt::format("pgm_{:#x}.spv", info.pgm_hash);
+            Common::FS::IOFile file{path, Common::FS::FileAccessMode::Create,
+                                    Common::FS::FileType::BinaryFile};
+            if (file.IsOpen()) {
+                file.WriteRaw<u32>(spv.data(), spv.size());
+                LOG_INFO(Render_Vulkan, "DUMPPS wrote {}", path.string());
+            }
+        }
+    }
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
     vk::ShaderModule module;
