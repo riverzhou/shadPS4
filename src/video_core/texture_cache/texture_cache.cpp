@@ -1389,6 +1389,36 @@ void TextureCache::DebugDumpImage(Image& image, bool force) {
         LOG_INFO(Render_Vulkan, "Dumped depth {}x{} addr={:#x}", w, h, image.info.guest_address);
         return;
     }
+    if (image.info.pixel_format == vk::Format::eR8Unorm ||
+        image.info.pixel_format == vk::Format::eR8Srgb) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{w} * h;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / fmt::format("{:x}_{}x{}_r8.png", image.info.guest_address, w, h);
+        stbi_write_png(path.string().c_str(), w, h, 1, readback.mapped_data.data(), w);
+        LOG_INFO(Render_Vulkan, "Dumped R8 {}x{} addr={:#x} first={}", w, h,
+                 image.info.guest_address,
+                 w * h > 0 ? readback.mapped_data[0] : 0);
+        return;
+    }
     if (image.info.pixel_format == vk::Format::eA2B10G10R10UnormPack32) {
         const u32 w = image.info.size.width;
         const u32 h = image.info.size.height;
