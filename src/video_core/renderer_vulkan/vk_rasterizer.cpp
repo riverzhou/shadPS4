@@ -308,6 +308,20 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         }
     }
     const u32 this_draw_index = g_draw_index++;
+    if (std::getenv("SHADPS4_LOG_WORLD_DRAWS") != nullptr &&
+        regs.viewports[0].xscale == 960.0f && regs.viewports[0].yscale == 540.0f &&
+        regs.num_indices > 100) {
+        static std::atomic<u32> world_log{0};
+        if (world_log.fetch_add(1, std::memory_order_relaxed) < 2000) {
+            const u32 prog = pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Fragment)] != 0
+                                 ? u32(pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash)
+                                 : 0;
+            LOG_INFO(Render_Vulkan, "WORLD #{} prog={:#x} n={} cb={:#x} fmt={}",
+                     this_draw_index, prog, regs.num_indices,
+                     regs.color_buffers[0].Address(),
+                     static_cast<u32>(regs.color_buffers[0].info.format));
+        }
+    }
     if (std::getenv("SHADPS4_LOG_ALL_CB") != nullptr) {
         static std::atomic<u32> cb_log{0};
         if (cb_log.fetch_add(1, std::memory_order_relaxed) < 5000) {
