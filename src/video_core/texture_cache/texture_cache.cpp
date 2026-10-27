@@ -1389,6 +1389,71 @@ void TextureCache::DebugDumpImage(Image& image, bool force) {
         LOG_INFO(Render_Vulkan, "Dumped depth {}x{} addr={:#x}", w, h, image.info.guest_address);
         return;
     }
+    if (image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{w} * h * 8;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        auto half_to_float = [](u16 h) {
+            const u32 sign = u32(h & 0x8000) << 16;
+            const u32 exp = (h >> 10) & 0x1f;
+            const u32 mant = h & 0x3ff;
+            u32 bits;
+            if (exp == 0) {
+                if (mant == 0) {
+                    bits = sign;
+                } else {
+                    u32 e = 127 - 15 + 1;
+                    u32 m = mant;
+                    while ((m & 0x400) == 0) {
+                        m <<= 1;
+                        --e;
+                    }
+                    bits = sign | (e << 23) | ((m & 0x3ff) << 13);
+                }
+            } else if (exp == 31) {
+                bits = sign | 0x7f800000 | (mant << 13);
+            } else {
+                bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+            }
+            return std::bit_cast<float>(bits);
+        };
+        std::vector<u8> rgba(u64{w} * h * 4);
+        const auto* src = readback.mapped_data.data();
+        for (u32 i = 0; i < w * h; ++i) {
+            u16 c[4];
+            std::memcpy(c, src + i * 8, 8);
+            for (int k = 0; k < 3; ++k) {
+                float x = half_to_float(c[k]);
+                x = x / (1.0f + x);
+                rgba[i * 4 + k] =
+                    u8(std::pow(std::clamp(x, 0.0f, 1.0f), 1.0f / 2.2f) * 255.0f + 0.5f);
+            }
+            rgba[i * 4 + 3] = 255;
+        }
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / fmt::format("{:x}_{}x{}_rgba16f.png", image.info.guest_address, w, h);
+        stbi_write_png(path.string().c_str(), w, h, 4, rgba.data(), w * 4);
+        LOG_INFO(Render_Vulkan, "Dumped RGBA16F {}x{} addr={:#x} -> {}", w, h,
+                 image.info.guest_address, path.string());
+        return;
+    }
     if (image.info.pixel_format == vk::Format::eB10G11R11UfloatPack32) {
         const u32 w = image.info.size.width;
         const u32 h = image.info.size.height;
