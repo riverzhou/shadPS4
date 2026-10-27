@@ -1080,6 +1080,44 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
     pipeline->GetVertexInputs(attributes, bindings, divisors, guest_buffers,
                               regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
 
+    if (std::getenv("SHADPS4_TRACE_GEOMETRY") != nullptr) {
+        static std::atomic<u32> geom_log{0};
+        if (geom_log.fetch_add(1, std::memory_order_relaxed) < 400) {
+            for (u32 i = 0; i < guest_buffers.size(); ++i) {
+                const auto& vb = guest_buffers[i];
+                if (vb.base_address == 0) {
+                    continue;
+                }
+                LOG_INFO(Render_Vulkan,
+                         "GEOM v#{} base={:#x} size={:#x} stride={} records={} dfmt={} nfmt={}",
+                         i, vb.base_address, vb.GetSize(), vb.stride, vb.num_records,
+                         static_cast<u32>(vb.data_format), static_cast<u32>(vb.num_format));
+                if (static_cast<u32>(vb.data_format) == 11u && vb.stride >= 8 &&
+                    vb.num_records > 0 && vb.num_records < 4096) {
+                    const u32 count = vb.num_records;
+                    std::vector<u8> data(u64{vb.stride} * count);
+                    memory->CopySparseMemory(vb.base_address, data.data(), data.size());
+                    float min_x = 1e30f, min_y = 1e30f, max_x = -1e30f, max_y = -1e30f;
+                    for (u32 v = 0; v < count; ++v) {
+                        float x, y;
+                        std::memcpy(&x, data.data() + u64{v} * vb.stride, 4);
+                        std::memcpy(&y, data.data() + u64{v} * vb.stride + 4, 4);
+                        min_x = std::min(min_x, x);
+                        min_y = std::min(min_y, y);
+                        max_x = std::max(max_x, x);
+                        max_y = std::max(max_y, y);
+                    }
+                    LOG_INFO(Render_Vulkan, "GEOM bbox v#{} x=[{},{}] y=[{},{}]", i, min_x, max_x,
+                             min_y, max_y);
+                }
+            }
+            const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
+            LOG_INFO(Render_Vulkan, "GEOM draw indices={} instances={} vs={:#x} cb={:#x}",
+                     regs.num_indices, regs.num_instances.NumInstances(), vs_info.pgm_hash,
+                     regs.color_buffers[0].Address());
+        }
+    }
+
     if (instance.IsVertexInputDynamicState()) {
         // Update current vertex inputs.
         const auto cmdbuf = scheduler.CommandBuffer();
