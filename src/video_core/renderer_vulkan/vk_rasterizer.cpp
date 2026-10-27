@@ -340,7 +340,14 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         const u64 ps_hash = key.stage_hashes[u32(Shader::SwStage::Fragment)];
         static const bool log_draw_hash =
             std::getenv("SHADPS4_LOG_DRAW_HASH") != nullptr;
-        if (log_draw_hash) {
+        static const u64 log_hash_after = [] {
+            const char* env = std::getenv("SHADPS4_LOG_DRAW_HASH_AFTER");
+            return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+        }();
+        const bool hash_after_ok =
+            log_hash_after == 0 ||
+            std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(log_hash_after);
+        if (log_draw_hash && hash_after_ok) {
             static std::atomic<u32> draw_hash_log{0};
             if (draw_hash_log.fetch_add(1, std::memory_order_relaxed) < 30000) {
                 LOG_INFO(Render_Vulkan,
@@ -529,7 +536,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         const char* env = std::getenv("SHADPS4_DUMP_AFTER_ADDR");
         return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
     }();
-    const u64 stage_ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
+    // Use the pipeline key, not GetStage(): depth-only pipelines have no fragment stage and
+    // GetStage() is not valid for them.
+    const u64 stage_ps_hash =
+        pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Fragment)];
     const bool dump_this = dump_after_addr != 0
                                ? regs.color_buffers[0].Address() == dump_after_addr
                                : dump_after_ps != 0
@@ -538,24 +548,13 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                                   regs.color_buffers[0].Pitch() == 1920 &&
                                   regs.color_buffers[0].Height() == 1088);
     if (dump_this) {
-        static std::atomic<bool> dumped{false};
+        static std::atomic<bool> requested{false};
         const auto elapsed = std::chrono::steady_clock::now() - g_process_start;
-        if (!dumped.load(std::memory_order_relaxed) &&
+        if (!requested.load(std::memory_order_relaxed) &&
             elapsed > std::chrono::seconds(100)) {
-            dumped.store(true, std::memory_order_relaxed);
-            scheduler.Finish();
-            const auto& cb = regs.color_buffers[0];
-            const VAddr addr = cb.Address();
-            const u64 size = u64{cb.Pitch()} * cb.Height() * 4;
-            const auto id = texture_cache.FindImageFromRange(addr, size, false);
-            if (id) {
-                texture_cache.DebugDumpImage(texture_cache.GetImage(id), true);
-                LOG_INFO(Render_Vulkan, "DUMPAFTER ps={:#x} addr={:#x} size={} id={}",
-                         dump_after_ps, addr, size, id.index);
-            } else {
-                LOG_INFO(Render_Vulkan, "DUMPAFTER ps={:#x} addr={:#x} no image", dump_after_ps,
-                         addr);
-            }
+            requested.store(true, std::memory_order_relaxed);
+            pending_dump_addr.store(regs.color_buffers[0].Address(), std::memory_order_relaxed);
+            LOG_INFO(Render_Vulkan, "DUMPAFTER requested addr={:#x}", pending_dump_addr.load());
         }
     }
 
@@ -2320,5 +2319,20 @@ u32 Rasterizer::GetGpuCommandProcessorThreadId() {
     return liverpool->GetGpuCommandProcessorThreadId();
 }
 #endif
+
+void Rasterizer::DebugDumpPending() {
+    const VAddr addr = pending_dump_addr.exchange(0, std::memory_order_relaxed);
+    if (addr == 0) {
+        return;
+    }
+    scheduler.Finish();
+    const auto id = texture_cache.FindImageFromRange(addr, 1, false);
+    if (id) {
+        texture_cache.DebugDumpImage(texture_cache.GetImage(id), true);
+        LOG_INFO(Render_Vulkan, "DUMPAFTER dumped addr={:#x} id={}", addr, id.index);
+    } else {
+        LOG_INFO(Render_Vulkan, "DUMPAFTER no image for addr={:#x}", addr);
+    }
+}
 
 } // namespace Vulkan

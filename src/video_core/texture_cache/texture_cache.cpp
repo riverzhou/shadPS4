@@ -1389,6 +1389,48 @@ void TextureCache::DebugDumpImage(Image& image, bool force) {
         LOG_INFO(Render_Vulkan, "Dumped depth {}x{} addr={:#x}", w, h, image.info.guest_address);
         return;
     }
+    if (image.info.pixel_format == vk::Format::eA2B10G10R10UnormPack32) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{w} * h * 4;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        std::vector<u8> rgba(size);
+        const auto* src = readback.mapped_data.data();
+        for (u32 i = 0; i < w * h; ++i) {
+            u32 v;
+            std::memcpy(&v, src + i * 4, 4);
+            auto enc = [](u32 c) {
+                const float x = float(c) / 1023.0f;
+                return u8(std::pow(x, 1.0f / 2.2f) * 255.0f + 0.5f);
+            };
+            rgba[i * 4 + 0] = enc(v & 0x3ff);
+            rgba[i * 4 + 1] = enc((v >> 10) & 0x3ff);
+            rgba[i * 4 + 2] = enc((v >> 20) & 0x3ff);
+            rgba[i * 4 + 3] = u8((((v >> 30) & 0x3) * 255u) / 3u);
+        }
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / fmt::format("{:x}_{}x{}_a2b10g10r10.png", image.info.guest_address, w, h);
+        stbi_write_png(path.string().c_str(), w, h, 4, rgba.data(), w * 4);
+        LOG_INFO(Render_Vulkan, "Dumped A2B10G10R10 {}x{} addr={:#x} -> {}", w, h,
+                 image.info.guest_address, path.string());
+        return;
+    }
     if (image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat) {
         const u32 w = image.info.size.width;
         const u32 h = image.info.size.height;

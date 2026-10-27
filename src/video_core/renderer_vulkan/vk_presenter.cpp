@@ -1219,6 +1219,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
         Rasterizer::NotifyFlip();
+        rasterizer->DebugDumpPending();
         static const bool dump_at_present =
             std::getenv("SHADPS4_DUMP_TEX_AT_PRESENT") != nullptr;
         if (dump_at_present) {

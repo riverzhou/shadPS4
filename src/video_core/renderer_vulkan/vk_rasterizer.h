@@ -47,6 +47,9 @@ public:
         return texture_cache;
     }
 
+    /// Debug: dump a color target requested by DUMP_AFTER_PS/ADDR at a safe point.
+    void DebugDumpPending();
+
     void Draw(bool is_indexed, u32 index_offset = 0);
     void DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 size, u32 max_count,
                       VAddr count_address, u16 vertex_sgpr_offset, u16 instance_sgpr_offset);
@@ -142,6 +145,7 @@ private:
     VideoCore::PageManager page_manager;
     VideoCore::BufferCache buffer_cache;
     VideoCore::TextureCache texture_cache;
+    std::atomic<VAddr> pending_dump_addr{0};
     AmdGpu::Liverpool* liverpool;
     Core::MemoryManager* memory;
     boost::icl::interval_set<VAddr> mapped_ranges;
