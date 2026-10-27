@@ -180,7 +180,7 @@ public:
                                          bool is_depth);
 
     /// Debug helper: dump an image to PNG when its extent matches a filter.
-    void DebugDumpImage(Image& image);
+    void DebugDumpImage(Image& image, bool force = false);
 
     /// Debug helper: try every cached image once (also reaches render targets that are not bound).
     void DebugDumpAll();

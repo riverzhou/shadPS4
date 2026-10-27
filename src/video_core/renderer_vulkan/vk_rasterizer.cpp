@@ -485,6 +485,41 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
     DebugState.IncDrawCall();
 
+    static const u64 dump_after_ps = [] {
+        const char* env = std::getenv("SHADPS4_DUMP_AFTER_PS");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+    }();
+    static const bool dump_after_quad =
+        std::getenv("SHADPS4_DUMP_AFTER_QUAD") != nullptr;
+    const bool dump_this = dump_after_ps != 0
+                               ? pipeline->GetGraphicsKey()
+                                         .stage_hashes[u32(Shader::SwStage::Fragment)] ==
+                                     dump_after_ps
+                               : (dump_after_quad && regs.num_indices <= 8 &&
+                                  regs.color_buffers[0].Pitch() == 1920 &&
+                                  regs.color_buffers[0].Height() == 1088);
+    if (dump_this) {
+        static std::atomic<bool> dumped{false};
+        const auto elapsed = std::chrono::steady_clock::now() - g_process_start;
+        if (!dumped.load(std::memory_order_relaxed) &&
+            elapsed > std::chrono::seconds(100)) {
+            dumped.store(true, std::memory_order_relaxed);
+            scheduler.Finish();
+            const auto& cb = regs.color_buffers[0];
+            const VAddr addr = cb.Address();
+            const u64 size = u64{cb.Pitch()} * cb.Height() * 4;
+            const auto id = texture_cache.FindImageFromRange(addr, size, false);
+            if (id) {
+                texture_cache.DebugDumpImage(texture_cache.GetImage(id), true);
+                LOG_INFO(Render_Vulkan, "DUMPAFTER ps={:#x} addr={:#x} size={} id={}",
+                         dump_after_ps, addr, size, id.index);
+            } else {
+                LOG_INFO(Render_Vulkan, "DUMPAFTER ps={:#x} addr={:#x} no image", dump_after_ps,
+                         addr);
+            }
+        }
+    }
+
     ResetBindings(false);
 }
 

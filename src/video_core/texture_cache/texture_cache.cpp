@@ -1324,21 +1324,21 @@ void TextureCache::DebugDumpAll() {
     }
 }
 
-void TextureCache::DebugDumpImage(Image& image) {
+void TextureCache::DebugDumpImage(Image& image, bool force) {
     static const char* filter = std::getenv("SHADPS4_DUMP_TEX_SIZE");
     static const VAddr want_addr = [] {
         const char* env = std::getenv("SHADPS4_DUMP_TEX_ADDR");
         return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
     }();
-    if (filter == nullptr) {
+    if (!force && filter == nullptr) {
         return;
     }
-    if (want_addr != 0 && !(image.info.guest_address <= want_addr &&
+    if (!force && want_addr != 0 && !(image.info.guest_address <= want_addr &&
                             want_addr < image.info.guest_address + image.info.guest_size)) {
         return;
     }
     u32 want_w = 0, want_h = 0;
-    const bool dump_all_sizes = std::string_view{filter} == "*";
+    const bool dump_all_sizes = filter != nullptr && std::string_view{filter} == "*";
     if (std::getenv("SHADPS4_DUMP_TEX_LOG") != nullptr) {
         static std::atomic<u32> seen{0};
         if (seen.fetch_add(1) < 500) {
@@ -1347,7 +1347,7 @@ void TextureCache::DebugDumpImage(Image& image) {
                      image.info.num_bits, static_cast<u32>(image.info.props.is_block));
         }
     }
-    if (!dump_all_sizes &&
+    if (!force && !dump_all_sizes &&
         (std::sscanf(filter, "%ux%u", &want_w, &want_h) != 2 ||
          image.info.size.width != want_w || image.info.size.height != want_h)) {
         return;
@@ -1387,6 +1387,63 @@ void TextureCache::DebugDumpImage(Image& image) {
         meta << w << " " << h << " D32Sfloat" << "\n";
         meta.close();
         LOG_INFO(Render_Vulkan, "Dumped depth {}x{} addr={:#x}", w, h, image.info.guest_address);
+        return;
+    }
+    if (image.info.pixel_format == vk::Format::eB10G11R11UfloatPack32) {
+        const u32 w = image.info.size.width;
+        const u32 h = image.info.size.height;
+        const u64 size = u64{w} * h * 4;
+        Buffer readback{instance, 0, size, MemoryType::HostCached};
+        if (readback.mapped_data.empty()) {
+            return;
+        }
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+        runtime.FlushBarriers();
+        scheduler.Finish();
+        readback.Invalidate(0, size);
+        std::vector<u8> rgba(size / 4 * 4);
+        const auto* src = readback.mapped_data.data();
+        for (u32 i = 0; i < w * h; ++i) {
+            u32 v;
+            std::memcpy(&v, src + i * 4, 4);
+            auto unorm11 = [](u32 bits) {
+                const u32 e = (bits >> 6) & 0x1f;
+                const u32 m = bits & 0x3f;
+                return e == 0 ? (float(m) / 64.0f) * std::pow(2.0f, -14.0f)
+                              : (1.0f + float(m) / 64.0f) * std::pow(2.0f, float(e) - 15.0f);
+            };
+            auto unorm10 = [](u32 bits) {
+                const u32 e = (bits >> 5) & 0x1f;
+                const u32 m = bits & 0x1f;
+                return e == 0 ? (float(m) / 32.0f) * std::pow(2.0f, -14.0f)
+                              : (1.0f + float(m) / 32.0f) * std::pow(2.0f, float(e) - 15.0f);
+            };
+            const float r = unorm11(v & 0x7ff);
+            const float g = unorm11((v >> 11) & 0x7ff);
+            const float b = unorm10((v >> 22) & 0x3ff);
+            auto enc = [](float x) {
+                x = x / (1.0f + x);
+                return u8(std::pow(std::clamp(x, 0.0f, 1.0f), 1.0f / 2.2f) * 255.0f + 0.5f);
+            };
+            rgba[i * 4 + 0] = enc(r);
+            rgba[i * 4 + 1] = enc(g);
+            rgba[i * 4 + 2] = enc(b);
+            rgba[i * 4 + 3] = 255;
+        }
+        const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / fmt::format("{:x}_{}x{}_r11g11b10.png", image.info.guest_address, w, h);
+        stbi_write_png(path.string().c_str(), w, h, 4, rgba.data(), w * 4);
+        LOG_INFO(Render_Vulkan, "Dumped R11G11B10 {}x{} addr={:#x} -> {}", w, h,
+                 image.info.guest_address, path.string());
         return;
     }
     if (image.info.props.is_block) {
