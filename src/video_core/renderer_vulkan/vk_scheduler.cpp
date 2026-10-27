@@ -47,6 +47,14 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     std::array<vk::RenderingAttachmentInfo, 8> color_attachments;
     for (u32 i = 0; i < render_state.num_color_attachments; ++i) {
         const auto& cb = render_state.color_attachments[i];
+        static const bool log_clear = std::getenv("SHADPS4_LOG_CLEAR") != nullptr;
+        if (log_clear && cb.is_clear) {
+            static std::atomic<u32> clear_log{0};
+            if (clear_log.fetch_add(1, std::memory_order_relaxed) < 200) {
+                LOG_INFO(Render_Vulkan, "CLEAR idx={} value=0x{:08x}", i,
+                         cb.clear_value[0]);
+            }
+        }
         color_attachments[i] = vk::RenderingAttachmentInfo{
             .imageView = cb.image_view,
             .imageLayout = cb.image_layout,
