@@ -302,6 +302,23 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
     const u32 this_draw_index = g_draw_index++;
     {
+        static const VAddr log_target_addr = [] {
+            const char* env = std::getenv("SHADPS4_LOG_TARGET_ADDR");
+            return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+        }();
+        if (log_target_addr != 0 && regs.color_buffers[0].Address() == log_target_addr) {
+            static std::atomic<u32> target_log{0};
+            if (target_log.fetch_add(1, std::memory_order_relaxed) < 400) {
+                LOG_INFO(Render_Vulkan, "TGTLOG #{} ps={:#x} n={} blend={} vp={}x{}",
+                         this_draw_index,
+                         pipeline->GetGraphicsKey()
+                             .stage_hashes[u32(Shader::SwStage::Fragment)],
+                         regs.num_indices,
+                         static_cast<u32>(regs.blend_control[0].enable),
+                         static_cast<f32>(regs.viewports[0].xscale),
+                         static_cast<f32>(regs.viewports[0].yscale));
+            }
+        }
         const auto& key = pipeline->GetGraphicsKey();
         const u64 ps_hash = key.stage_hashes[u32(Shader::SwStage::Fragment)];
         static const bool log_draw_hash =
@@ -1504,6 +1521,18 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             }
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
+            static const VAddr dump_bind_addr = [] {
+                const char* env = std::getenv("SHADPS4_DUMP_TEX_ADDR");
+                return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+            }();
+            if (dump_bind_addr != 0 && tsharp.Address() == dump_bind_addr &&
+                std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(100)) {
+                static std::atomic<u32> bind_dump_log{0};
+                if (bind_dump_log.fetch_add(1, std::memory_order_relaxed) < 2) {
+                    texture_cache.DebugDumpImage(*image, true);
+                    LOG_INFO(Render_Vulkan, "Dumped bound texture addr={:#x}", dump_bind_addr);
+                }
+            }
             if (std::getenv("SHADPS4_DUMP_TEX_SIZE") != nullptr) {
                 static std::atomic<u32> dump_calls{0};
                 if (dump_calls.fetch_add(1, std::memory_order_relaxed) % 5000 == 0) {
