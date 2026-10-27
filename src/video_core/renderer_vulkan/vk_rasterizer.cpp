@@ -500,6 +500,33 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         return;
     }
 
+    static const bool clear_ui_target =
+        std::getenv("SHADPS4_CLEAR_UI_TARGET") != nullptr;
+    const VAddr clear_addr = regs.color_buffers[0].Address();
+    if (clear_ui_target &&
+        (clear_addr == 0x281800000 || clear_addr == 0x281000000 ||
+         clear_addr == 0x280800000)) {
+        static u64 cleared_frame = ~0ull;
+        const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
+        if (cleared_frame != frame) {
+            cleared_frame = frame;
+            const auto& cb = regs.color_buffers[0];
+            const u64 size = u64{cb.Pitch()} * cb.Height() * 4;
+            const auto id =
+                texture_cache.FindImageFromRange(cb.Address(), size, false);
+            if (id) {
+                auto& image = texture_cache.GetImage(id);
+                const vk::ClearValue black{
+                    .color = vk::ClearColorValue{std::array<float, 4>{0.f, 0.f, 0.f, 0.f}}};
+                const VideoCore::SubresourceRange range{
+                    .base = {.level = 0, .layer = 0},
+                    .extent = {.levels = image.info.resources.levels,
+                               .layers = image.info.resources.layers}};
+                runtime.ClearImage(&image, range, black);
+                LOG_INFO(Render_Vulkan, "CLEARUI addr={:#x} frame={}", cb.Address(), frame);
+            }
+        }
+    }
     PrepareRenderState(pipeline);
     if (!BindResources(pipeline)) {
         return;
