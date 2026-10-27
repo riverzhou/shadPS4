@@ -529,12 +529,11 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         const char* env = std::getenv("SHADPS4_DUMP_AFTER_ADDR");
         return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
     }();
+    const u64 stage_ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
     const bool dump_this = dump_after_addr != 0
                                ? regs.color_buffers[0].Address() == dump_after_addr
                                : dump_after_ps != 0
-                               ? pipeline->GetGraphicsKey()
-                                         .stage_hashes[u32(Shader::SwStage::Fragment)] ==
-                                     dump_after_ps
+                               ? stage_ps_hash == dump_after_ps
                                : (dump_after_quad && regs.num_indices <= 8 &&
                                   regs.color_buffers[0].Pitch() == 1920 &&
                                   regs.color_buffers[0].Height() == 1088);
