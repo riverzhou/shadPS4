@@ -333,10 +333,13 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         if (log_target_addr != 0 && regs.color_buffers[0].Address() == log_target_addr) {
             static std::atomic<u32> target_log{0};
             if (target_log.fetch_add(1, std::memory_order_relaxed) < 400) {
-                LOG_INFO(Render_Vulkan, "TGTLOG #{} ps={:#x} n={} blend={} vp={}x{}",
-                         this_draw_index,
-                         pipeline->GetGraphicsKey()
-                             .stage_hashes[u32(Shader::SwStage::Fragment)],
+                const auto& tkey = pipeline->GetGraphicsKey();
+                const u64 tps = tkey.stage_hashes[u32(Shader::SwStage::Fragment)];
+                LOG_INFO(Render_Vulkan,
+                         "TGTLOG #{} ps={:#x} prog={:#x} n={} blend={} vp={}x{}",
+                         this_draw_index, tps,
+                         tps != 0 ? u64{pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash}
+                                  : 0ull,
                          regs.num_indices,
                          static_cast<u32>(regs.blend_control[0].enable),
                          static_cast<f32>(regs.viewports[0].xscale),
