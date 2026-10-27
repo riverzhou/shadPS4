@@ -1418,10 +1418,18 @@ void TextureCache::DebugDumpImage(Image& image, bool force) {
                 const float x = float(c) / 1023.0f;
                 return u8(std::pow(x, 1.0f / 2.2f) * 255.0f + 0.5f);
             };
-            rgba[i * 4 + 0] = enc(v & 0x3ff);
-            rgba[i * 4 + 1] = enc((v >> 10) & 0x3ff);
-            rgba[i * 4 + 2] = enc((v >> 20) & 0x3ff);
-            rgba[i * 4 + 3] = u8((((v >> 30) & 0x3) * 255u) / 3u);
+            if (std::getenv("SHADPS4_DUMP_TEX_ALPHA") != nullptr) {
+                const u8 a = u8((((v >> 30) & 0x3) * 255u) / 3u);
+                rgba[i * 4 + 0] = a;
+                rgba[i * 4 + 1] = a;
+                rgba[i * 4 + 2] = a;
+                rgba[i * 4 + 3] = 255;
+            } else {
+                rgba[i * 4 + 0] = enc(v & 0x3ff);
+                rgba[i * 4 + 1] = enc((v >> 10) & 0x3ff);
+                rgba[i * 4 + 2] = enc((v >> 20) & 0x3ff);
+                rgba[i * 4 + 3] = u8((((v >> 30) & 0x3) * 255u) / 3u);
+            }
         }
         const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
         std::filesystem::create_directories(dir);
@@ -1547,6 +1555,10 @@ void TextureCache::DebugDumpImage(Image& image, bool force) {
         }
         const auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir) / "dumped_tex";
         std::filesystem::create_directories(dir);
+        std::ofstream raw{dir / fmt::format("{:x}_{}x{}_r11.raw", image.info.guest_address, w, h),
+                          std::ios::binary};
+        raw.write(reinterpret_cast<const char*>(readback.mapped_data.data()), size);
+        raw.close();
         const auto path = dir / fmt::format("{:x}_{}x{}_r11g11b10.png", image.info.guest_address, w, h);
         stbi_write_png(path.string().c_str(), w, h, 4, rgba.data(), w * 4);
         LOG_INFO(Render_Vulkan, "Dumped R11G11B10 {}x{} addr={:#x} -> {}", w, h,
