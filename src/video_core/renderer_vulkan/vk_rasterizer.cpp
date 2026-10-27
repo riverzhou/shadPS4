@@ -581,6 +581,22 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
             }
         }
     }
+
+    if (std::getenv("SHADPS4_GPU_CLAMP_HISTORY") != nullptr &&
+        regs.color_buffers[0].Address() == 0x1007600000 &&
+        std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(100)) {
+        static u64 clamp_frame = ~0ull;
+        const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
+        if (clamp_frame != frame) {
+            clamp_frame = frame;
+            for (const VAddr addr : {VAddr{0x1007600000}, VAddr{0x10085f0000}}) {
+                const auto id = texture_cache.FindImageFromRange(addr, 1920ull * 1080 * 8, false);
+                if (id) {
+                    runtime.ClampHistoryImage(&texture_cache.GetImage(id));
+                }
+            }
+        }
+    }
     PrepareRenderState(pipeline);
     if (!BindResources(pipeline)) {
         return;

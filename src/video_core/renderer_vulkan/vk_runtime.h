@@ -66,6 +66,9 @@ public:
     void ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRange& range,
                     const vk::ClearValue& clear_value);
 
+    // Debug: clamp an RGBA16F image to [0,1] through a temporary UNORM image.
+    void ClampHistoryImage(VideoCore::Image* image);
+
     void SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing = true);
 
     void AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,

@@ -7,6 +7,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include <vk_mem_alloc.h>
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/blit_helper.h"
 #include "video_core/texture_cache/image.h"
@@ -675,6 +676,102 @@ void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
 
     dst->flags |= VideoCore::ImageFlagBits::GpuModified;
     dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
+}
+
+
+void Runtime::ClampHistoryImage(VideoCore::Image* image) {
+    VkImageCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ci.extent = {image->info.size.width, image->info.size.height, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VkImage temp{};
+    VmaAllocation alloc{};
+    if (vmaCreateImage(instance.GetAllocator(), &ci, &aci, &temp, &alloc, nullptr) != VK_SUCCESS) {
+        return;
+    }
+
+    scheduler.EndRendering();
+    Transit(image, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eTransfer,
+            vk::AccessFlagBits2::eTransferRead);
+    FlushBarriers();
+
+    auto cmd = scheduler.CommandBuffer();
+    const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+    const vk::ImageMemoryBarrier2 to_dst{
+        .srcStageMask = vk::PipelineStageFlagBits2::eNone,
+        .srcAccessMask = vk::AccessFlagBits2::eNone,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eTransferDstOptimal,
+        .image = temp,
+        .subresourceRange = range,
+    };
+    vk::DependencyInfo dep{};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &to_dst;
+    cmd.pipelineBarrier2(dep);
+
+    const vk::Offset3D extent{static_cast<int>(image->info.size.width),
+                              static_cast<int>(image->info.size.height), 1};
+    const vk::ImageBlit to_temp{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
+    };
+    cmd.blitImage(image->GetImage(), vk::ImageLayout::eTransferSrcOptimal, temp,
+                  vk::ImageLayout::eTransferDstOptimal, to_temp, vk::Filter::eLinear);
+
+    const vk::ImageMemoryBarrier2 dst_to_src{
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+        .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+        .image = temp,
+        .subresourceRange = range,
+    };
+    const vk::ImageMemoryBarrier2 src_to_dst{
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
+        .newLayout = vk::ImageLayout::eTransferDstOptimal,
+        .image = image->GetImage(),
+        .subresourceRange = range,
+    };
+    const std::array<vk::ImageMemoryBarrier2, 2> barriers{dst_to_src, src_to_dst};
+    vk::DependencyInfo dep2{};
+    dep2.imageMemoryBarrierCount = 2;
+    dep2.pImageMemoryBarriers = barriers.data();
+    cmd.pipelineBarrier2(dep2);
+
+    const vk::ImageBlit to_history{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array<vk::Offset3D, 2>{vk::Offset3D{0, 0, 0}, extent},
+    };
+    cmd.blitImage(temp, vk::ImageLayout::eTransferSrcOptimal, image->GetImage(),
+                  vk::ImageLayout::eTransferDstOptimal, to_history, vk::Filter::eLinear);
+
+    Transit(image, vk::ImageLayout::eShaderReadOnlyOptimal,
+            vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
+    FlushBarriers();
+    scheduler.Finish();
+    vmaDestroyImage(instance.GetAllocator(), temp, alloc);
 }
 
 void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRange& range,
