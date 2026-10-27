@@ -43,6 +43,16 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         }
     }();
 
+    if (std::getenv("SHADPS4_LOG_SAMPLER_BIAS") != nullptr) {
+        static std::atomic<u32> log_count{0};
+        if (log_count.fetch_add(1, std::memory_order_relaxed) < 200) {
+            LOG_INFO(Render_Vulkan, "SAMPLER bias={} min={} max={} mip={} mag={} minf={}",
+                     sampler.LodBias(), sampler.MinLod(), sampler.MaxLod(),
+                     static_cast<u32>(sampler.mip_filter.Value()),
+                     static_cast<u32>(sampler.xy_mag_filter.Value()),
+                     static_cast<u32>(sampler.xy_min_filter.Value()));
+        }
+    }
     const vk::SamplerCreateInfo sampler_ci = {
         .pNext = custom_color ? &*custom_color : nullptr,
         .magFilter = std::getenv("SHADPS4_FORCE_NEAREST") != nullptr
