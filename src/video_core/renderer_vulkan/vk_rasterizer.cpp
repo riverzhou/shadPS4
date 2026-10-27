@@ -1620,6 +1620,14 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 const char* env = std::getenv("SHADPS4_LOG_TEX_FOR_PS");
                 return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
             }();
+            if (std::getenv("SHADPS4_LOG_CFA_BINDINGS") != nullptr &&
+                stage.pgm_hash == 0xcfa125dd) {
+                static std::atomic<u32> bind_log{0};
+                if (bind_log.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    LOG_INFO(Render_Vulkan, "CFABIND slot={} addr={:#x} fmt={}",
+                             num_images - 1, tsharp.Address(), static_cast<u32>(data_fmt));
+                }
+            }
             if (log_ps != 0 && stage.pgm_hash == log_ps) {
                 static std::atomic<u32> tex_for_ps{0};
                 if (tex_for_ps.fetch_add(1, std::memory_order_relaxed) < 500) {
