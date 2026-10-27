@@ -1697,6 +1697,18 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                              num_images - 1, tsharp.Address(), static_cast<u32>(data_fmt));
                 }
             }
+            static const VAddr log_tex_addr = [] {
+                const char* env = std::getenv("SHADPS4_LOG_TEX_ADDR");
+                return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+            }();
+            if (log_tex_addr != 0 && tsharp.Address() == log_tex_addr) {
+                static std::atomic<u32> tex_addr_log{0};
+                if (tex_addr_log.fetch_add(1, std::memory_order_relaxed) < 32) {
+                    LOG_INFO(Render_Vulkan, "TEXADDR ps={:#x} addr={:#x} {}x{} fmt={} n={}",
+                             stage.pgm_hash, tsharp.Address(), tsharp.width + 1, tsharp.height + 1,
+                             static_cast<u32>(data_fmt), liverpool->regs.num_indices);
+                }
+            }
             if (log_ps != 0 && stage.pgm_hash == log_ps) {
                 static std::atomic<u32> tex_for_ps{0};
                 if (tex_for_ps.fetch_add(1, std::memory_order_relaxed) < 500) {
