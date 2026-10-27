@@ -1600,6 +1600,18 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 desc.view_info.range.extent.levels = 1;
             }
 
+            static const u64 log_ps = [] {
+                const char* env = std::getenv("SHADPS4_LOG_TEX_FOR_PS");
+                return env != nullptr ? std::strtoull(env, nullptr, 0) : u64{0};
+            }();
+            if (log_ps != 0 && stage.pgm_hash == log_ps) {
+                static std::atomic<u32> tex_for_ps{0};
+                if (tex_for_ps.fetch_add(1, std::memory_order_relaxed) < 500) {
+                    LOG_INFO(Render_Vulkan, "TEXFORPS ps={:#x} addr={:#x} {}x{} fmt={}",
+                             stage.pgm_hash, tsharp.Address(), tsharp.width + 1,
+                             tsharp.height + 1, static_cast<u32>(data_fmt));
+                }
+            }
             if (std::getenv("SHADPS4_LOG_COMPOSITE_TEX") != nullptr &&
                 liverpool->regs.num_indices <= 8 && !liverpool->regs.blend_control[0].enable) {
                 static std::atomic<u32> comp_log{0};
