@@ -97,6 +97,9 @@ void EmitEpilogue(EmitContext& ctx) {
             if (std::string_view{env} == "red") {
                 return 2;
             }
+            if (std::string_view{env} == "uv") {
+                return 3;
+            }
             return 0;
         }();
         if (std::ranges::find(debug_hashes, size_t{ctx.info.pgm_hash}) != debug_hashes.end()) {
@@ -115,6 +118,16 @@ void EmitEpilogue(EmitContext& ctx) {
                                 : loaded;
                 }
                 std::array<Id, 4> values{alpha, alpha, alpha, alpha};
+                if (debug_mode == 3 && ctx.frag_coord.value != 0) {
+                    const Id coord = ctx.OpLoad(ctx.F32[4], ctx.frag_coord);
+                    const Id x = ctx.OpCompositeExtract(ctx.F32[1], coord, 0);
+                    const Id y = ctx.OpCompositeExtract(ctx.F32[1], coord, 1);
+                    const Id u = ctx.OpFDiv(ctx.F32[1], x, ctx.Constant(ctx.F32[1], 1920.0f));
+                    const Id v = ctx.OpFDiv(ctx.F32[1], y, ctx.Constant(ctx.F32[1], 1080.0f));
+                    const Id zero = ctx.Constant(ctx.F32[1], 0.0f);
+                    const Id one = ctx.Constant(ctx.F32[1], 1.0f);
+                    values = {u, v, zero, one};
+                }
                 const Id debug_color = ctx.OpCompositeConstruct(
                     ctx.F32[attr.num_components],
                     std::span<const Id>{values.data(), attr.num_components});
