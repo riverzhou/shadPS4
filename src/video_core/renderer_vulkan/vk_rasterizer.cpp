@@ -587,7 +587,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(100)) {
         static u64 clamp_frame = ~0ull;
         const u64 frame = g_flip_frame.load(std::memory_order_relaxed);
-        if (clamp_frame != frame) {
+        if (clamp_frame != frame && (frame % 4) == 0) {
             clamp_frame = frame;
             for (const VAddr addr : {VAddr{0x1007600000}, VAddr{0x10085f0000}}) {
                 const auto id = texture_cache.FindImageFromRange(addr, 1920ull * 1080 * 8, false);

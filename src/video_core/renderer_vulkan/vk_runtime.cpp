@@ -693,10 +693,22 @@ void Runtime::ClampHistoryImage(VideoCore::Image* image) {
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    VkImage temp{};
-    VmaAllocation alloc{};
-    if (vmaCreateImage(instance.GetAllocator(), &ci, &aci, &temp, &alloc, nullptr) != VK_SUCCESS) {
-        return;
+    static VkImage temp{};
+    static VmaAllocation alloc{};
+    static u32 temp_w{0}, temp_h{0};
+    static bool temp_initialized{false};
+    if (temp == VK_NULL_HANDLE || temp_w != image->info.size.width ||
+        temp_h != image->info.size.height) {
+        scheduler.Finish();
+        if (temp != VK_NULL_HANDLE) {
+            vmaDestroyImage(instance.GetAllocator(), temp, alloc);
+        }
+        if (vmaCreateImage(instance.GetAllocator(), &ci, &aci, &temp, &alloc, nullptr) != VK_SUCCESS) {
+            return;
+        }
+        temp_w = image->info.size.width;
+        temp_h = image->info.size.height;
+        temp_initialized = false;
     }
 
     scheduler.EndRendering();
@@ -711,7 +723,8 @@ void Runtime::ClampHistoryImage(VideoCore::Image* image) {
         .srcAccessMask = vk::AccessFlagBits2::eNone,
         .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .oldLayout = vk::ImageLayout::eUndefined,
+        .oldLayout = temp_initialized ? vk::ImageLayout::eTransferSrcOptimal
+                                      : vk::ImageLayout::eUndefined,
         .newLayout = vk::ImageLayout::eTransferDstOptimal,
         .image = temp,
         .subresourceRange = range,
@@ -770,8 +783,7 @@ void Runtime::ClampHistoryImage(VideoCore::Image* image) {
     Transit(image, vk::ImageLayout::eShaderReadOnlyOptimal,
             vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     FlushBarriers();
-    scheduler.Finish();
-    vmaDestroyImage(instance.GetAllocator(), temp, alloc);
+    temp_initialized = true;
 }
 
 void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRange& range,
