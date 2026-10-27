@@ -438,7 +438,8 @@ bool PipelineCache::RefreshGraphicsKey() {
     // 2D draws with depth testing off still carry alpha (GT7's Music Rally map background is a
     // fully transparent red quad that was composited opaque). Force standard alpha blending for
     // every depth-disabled draw; 3D draws keep the guest blend state.
-    key.force_blend = !regs.depth_control.depth_enable;
+    key.force_blend = std::getenv("SHADPS4_NO_FORCE_BLEND") == nullptr &&
+                      !regs.depth_control.depth_enable;
     key.depth_samples = db_enabled ? regs.depth_buffer.NumSamples() : 1;
     key.num_samples = key.depth_samples;
     key.cb_shader_mask = regs.color_shader_mask;
