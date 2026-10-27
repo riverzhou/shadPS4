@@ -850,6 +850,9 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    // A pending debug dump is serviced at the frame boundary, before any command buffer is
+    // recorded. This avoids Finish() recycling a buffer that is still being recorded.
+    rasterizer->DebugDumpPending();
     VideoCore::GpuTrace::StartDumpAtTimer();
     static const bool watchdog_requested = std::getenv("SHADPS4_GPU_WATCHDOG") != nullptr;
     static bool watchdog_started = false;
@@ -1219,7 +1222,6 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
         Rasterizer::NotifyFlip();
-        rasterizer->DebugDumpPending();
         static const bool dump_at_present =
             std::getenv("SHADPS4_DUMP_TEX_AT_PRESENT") != nullptr;
         if (dump_at_present) {

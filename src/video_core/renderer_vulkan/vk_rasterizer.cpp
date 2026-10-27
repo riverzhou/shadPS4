@@ -2325,7 +2325,7 @@ void Rasterizer::DebugDumpPending() {
     if (addr == 0) {
         return;
     }
-    scheduler.Finish();
+    instance.GetDevice().waitIdle();
     const auto id = texture_cache.FindImageFromRange(addr, 1, false);
     if (id) {
         texture_cache.DebugDumpImage(texture_cache.GetImage(id), true);
