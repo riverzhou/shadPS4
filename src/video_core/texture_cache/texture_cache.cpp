@@ -1326,7 +1326,15 @@ void TextureCache::DebugDumpAll() {
 
 void TextureCache::DebugDumpImage(Image& image) {
     static const char* filter = std::getenv("SHADPS4_DUMP_TEX_SIZE");
+    static const VAddr want_addr = [] {
+        const char* env = std::getenv("SHADPS4_DUMP_TEX_ADDR");
+        return env != nullptr ? std::strtoull(env, nullptr, 0) : VAddr{0};
+    }();
     if (filter == nullptr) {
+        return;
+    }
+    if (want_addr != 0 && !(image.info.guest_address <= want_addr &&
+                            want_addr < image.info.guest_address + image.info.guest_size)) {
         return;
     }
     u32 want_w = 0, want_h = 0;

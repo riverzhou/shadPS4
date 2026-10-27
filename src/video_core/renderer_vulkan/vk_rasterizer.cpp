@@ -1443,6 +1443,15 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 desc.view_info.range.extent.levels = 1;
             }
 
+            if (std::getenv("SHADPS4_LOG_COMPOSITE_TEX") != nullptr &&
+                liverpool->regs.num_indices <= 8 && !liverpool->regs.blend_control[0].enable) {
+                static std::atomic<u32> comp_log{0};
+                if (comp_log.fetch_add(1, std::memory_order_relaxed) < 4000) {
+                    LOG_INFO(Render_Vulkan, "COMPTEX ps={:#x} addr={:#x} {}x{} fmt={}",
+                             stage.pgm_hash, tsharp.Address(), tsharp.width + 1,
+                             tsharp.height + 1, static_cast<u32>(data_fmt));
+                }
+            }
             if (skip_tex_size[0] != 0 && tsharp.width + 1 == skip_tex_size[0] &&
                 tsharp.height + 1 == skip_tex_size[1]) {
                 skip_draw = true;
