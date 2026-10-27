@@ -1666,6 +1666,14 @@ bool Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                     texture_cache.DebugDumpAll();
                 }
             }
+            if (std::getenv("SHADPS4_LOG_EXPOSURE") != nullptr &&
+                tsharp.Address() == 0x1000e32900) {
+                LOG_INFO(Render_Vulkan,
+                         "EXPOSURE bind={:#x} image={:#x} {}x{} fmt={} layers={} levels={}",
+                         tsharp.Address(), image->info.guest_address, image->info.size.width,
+                         image->info.size.height, vk::to_string(image->info.pixel_format),
+                         image->info.resources.layers, image->info.resources.levels);
+            }
             if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
                 // If this image has an associated depth image, it's a stencil attachment.
                 // Redirect the access to the actual depth-stencil buffer.
