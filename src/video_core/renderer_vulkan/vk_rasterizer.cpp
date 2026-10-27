@@ -543,6 +543,44 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
             }
         }
     }
+
+    if (std::getenv("SHADPS4_CLAMP_HISTORY_ONCE") != nullptr &&
+        regs.color_buffers[0].Address() == 0x1007600000) {
+        static bool clamped = false;
+        if (!clamped &&
+            std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(100)) {
+            clamped = true;
+            for (const VAddr addr : {VAddr{0x1007600000}, VAddr{0x10085f0000}}) {
+                const auto id = texture_cache.FindImageFromRange(addr, 1920ull * 1080 * 8, false);
+                if (!id) continue;
+                auto& image = texture_cache.GetImage(id);
+                const u32 w = image.info.size.width, h = image.info.size.height;
+                const u64 size = u64{w} * h * 8;
+                VideoCore::Buffer readback{instance, 0, size, VideoCore::MemoryType::HostCached};
+                if (readback.mapped_data.empty()) continue;
+                const vk::BufferImageCopy copy{.bufferOffset = 0, .bufferRowLength = 0,
+                    .bufferImageHeight = 0,
+                    .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                    .imageOffset = {0, 0, 0}, .imageExtent = {w, h, 1}};
+                runtime.DownloadImage(&image, &readback, std::span{&copy, 1});
+                runtime.FlushBarriers();
+                scheduler.Finish();
+                readback.Invalidate(0, size);
+                auto* data = reinterpret_cast<u16*>(readback.mapped_data.data());
+                u32 changed = 0;
+                for (u64 i = 0; i < u64{w} * h * 4; ++i) {
+                    const u16 v = data[i];
+                    u16 r = (v & 0x8000) ? 0 : (v > 0x3C00 ? 0x3C00 : v);
+                    if (r != v) { data[i] = r; ++changed; }
+                }
+                readback.Flush(0, size);
+                runtime.UploadImage(&image, &readback, std::span{&copy, 1});
+                runtime.FlushBarriers();
+                scheduler.Finish();
+                LOG_INFO(Render_Vulkan, "CLAMPHIST addr={:#x} {}x{} changed={}", addr, w, h, changed);
+            }
+        }
+    }
     PrepareRenderState(pipeline);
     if (!BindResources(pipeline)) {
         return;
