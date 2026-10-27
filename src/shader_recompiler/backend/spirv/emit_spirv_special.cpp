@@ -67,6 +67,61 @@ void ConvertPositionToClipSpace(EmitContext& ctx) {
 }
 
 void EmitEpilogue(EmitContext& ctx) {
+    if (ctx.hw_stage == HwStage::Fragment) {
+        static const std::vector<size_t> debug_hashes = [] {
+            std::vector<size_t> hashes;
+            const char* env = std::getenv("SHADPS4_DEBUG_PS_HASH");
+            if (env == nullptr) {
+                return hashes;
+            }
+            std::string_view list{env};
+            while (!list.empty()) {
+                const auto comma = list.find(',');
+                const auto token = list.substr(0, comma);
+                hashes.push_back(std::strtoull(std::string{token}.c_str(), nullptr, 0));
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                list.remove_prefix(comma + 1);
+            }
+            return hashes;
+        }();
+        static const int debug_mode = [] {
+            const char* env = std::getenv("SHADPS4_DEBUG_PS_MODE");
+            if (env == nullptr) {
+                return 0;
+            }
+            if (std::string_view{env} == "black") {
+                return 1;
+            }
+            if (std::string_view{env} == "red") {
+                return 2;
+            }
+            return 0;
+        }();
+        if (std::ranges::find(debug_hashes, size_t{ctx.info.pgm_hash}) != debug_hashes.end()) {
+            for (u32 i = 0; i < IR::NumRenderTargets; ++i) {
+                auto& attr = ctx.frag_outputs[i];
+                if (attr.num_components == 0) {
+                    continue;
+                }
+                Id alpha;
+                if (debug_mode == 1 || debug_mode == 2) {
+                    alpha = ctx.Constant(ctx.F32[1], debug_mode == 1 ? 0.0f : 1.0f);
+                } else {
+                    const Id loaded = ctx.OpLoad(ctx.F32[attr.num_components], attr.id);
+                    alpha = attr.num_components >= 4
+                                ? Id{ctx.OpCompositeExtract(ctx.F32[1], loaded, 3)}
+                                : loaded;
+                }
+                std::array<Id, 4> values{alpha, alpha, alpha, alpha};
+                const Id debug_color = ctx.OpCompositeConstruct(
+                    ctx.F32[attr.num_components],
+                    std::span<const Id>{values.data(), attr.num_components});
+                ctx.OpStore(attr.id, debug_color);
+            }
+        }
+    }
     if (ctx.hw_stage == HwStage::Vertex &&
         ctx.runtime_info.hw.vs.emulate_depth_negative_one_to_one) {
         ConvertDepthMode(ctx);
