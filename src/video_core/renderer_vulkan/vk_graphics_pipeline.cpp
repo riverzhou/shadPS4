@@ -333,7 +333,9 @@ GraphicsPipeline::GraphicsPipeline(
 
         const bool force_blend = key.force_blend != 0;
         attachments[i] = vk::PipelineColorBlendAttachmentState{
-            .blendEnable = static_cast<vk::Bool32>(force_blend || control.enable),
+            .blendEnable = static_cast<vk::Bool32>(
+                std::getenv("SHADPS4_NO_BLEND") == nullptr &&
+                (force_blend || control.enable)),
             .srcColorBlendFactor = force_blend ? vk::BlendFactor::eSrcAlpha : src_color,
             .dstColorBlendFactor = force_blend ? vk::BlendFactor::eOneMinusSrcAlpha : dst_color,
             .colorBlendOp = color_blend,
