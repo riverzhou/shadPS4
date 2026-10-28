@@ -1080,7 +1080,8 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
     pipeline->GetVertexInputs(attributes, bindings, divisors, guest_buffers,
                               regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
 
-    if (std::getenv("SHADPS4_TRACE_GEOMETRY") != nullptr) {
+    if (std::getenv("SHADPS4_TRACE_GEOMETRY") != nullptr &&
+        std::chrono::steady_clock::now() - g_process_start > std::chrono::seconds(100)) {
         static std::atomic<u32> geom_log{0};
         if (geom_log.fetch_add(1, std::memory_order_relaxed) < 400) {
             for (u32 i = 0; i < guest_buffers.size(); ++i) {
@@ -1107,8 +1108,13 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
                         max_x = std::max(max_x, x);
                         max_y = std::max(max_y, y);
                     }
-                    LOG_INFO(Render_Vulkan, "GEOM bbox v#{} x=[{},{}] y=[{},{}]", i, min_x, max_x,
-                             min_y, max_y);
+                    const u64 vs_hash =
+                        pipeline->GetGraphicsKey()
+                            .stage_hashes[u32(Shader::SwStage::Vertex)];
+                    LOG_INFO(Render_Vulkan,
+                             "GEOM bbox draw={} v#{} vs={:#x} cb={:#x} x=[{},{}] y=[{},{}]",
+                             g_draw_index, i, vs_hash, regs.color_buffers[0].Address(), min_x,
+                             max_x, min_y, max_y);
                 }
             }
             const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
