@@ -7,6 +7,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/gpu_trace.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/host_shaders/clamp_history_comp.h"
 #include <vk_mem_alloc.h>
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/blit_helper.h"
@@ -680,6 +681,113 @@ void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
 
 
 void Runtime::ClampHistoryImage(VideoCore::Image* image) {
+    if (std::getenv("SHADPS4_CLAMP_SHADER") != nullptr) {
+        struct ClampState {
+            vk::UniqueShaderModule module{};
+            vk::UniqueDescriptorSetLayout layout{};
+            vk::UniquePipelineLayout pipeline_layout{};
+            vk::UniquePipeline pipeline{};
+            vk::UniqueDescriptorPool pool{};
+            vk::DescriptorSet set{};
+            vk::UniqueImageView view{};
+            VkImage bound{VK_NULL_HANDLE};
+        };
+        static ClampState state{};
+        const auto& device = instance.GetDevice();
+        if (!state.pipeline) {
+            const vk::ShaderModuleCreateInfo module_info{
+                .codeSize = sizeof(CLAMP_HISTORY_COMP), .pCode = CLAMP_HISTORY_COMP};
+            state.module = Check<"clamp shader">(device.createShaderModuleUnique(module_info));
+            const vk::DescriptorSetLayoutBinding binding{
+                .binding = 0,
+                .descriptorType = vk::DescriptorType::eStorageImage,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eCompute,
+            };
+            vk::DescriptorSetLayoutCreateInfo layout_info{};
+            layout_info.bindingCount = 1;
+            layout_info.pBindings = &binding;
+            state.layout = Check<"clamp layout">(device.createDescriptorSetLayoutUnique(layout_info));
+            const vk::PushConstantRange push_range{
+                .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 12};
+            vk::PipelineLayoutCreateInfo pipeline_layout_info{};
+            pipeline_layout_info.setLayoutCount = 1;
+            pipeline_layout_info.pSetLayouts = &*state.layout;
+            pipeline_layout_info.pushConstantRangeCount = 1;
+            pipeline_layout_info.pPushConstantRanges = &push_range;
+            state.pipeline_layout = Check<"clamp pipeline layout">(device.createPipelineLayoutUnique(pipeline_layout_info));
+            const vk::ComputePipelineCreateInfo pipe_info{
+                .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                          .module = *state.module,
+                          .pName = "main"},
+                .layout = *state.pipeline_layout,
+            };
+            state.pipeline = Check<"clamp pipeline">(
+                device.createComputePipelineUnique(nullptr, pipe_info));
+            const vk::DescriptorPoolSize pool_size{vk::DescriptorType::eStorageImage, 1};
+            vk::DescriptorPoolCreateInfo pool_info{};
+            pool_info.maxSets = 1;
+            pool_info.poolSizeCount = 1;
+            pool_info.pPoolSizes = &pool_size;
+            state.pool = Check<"clamp pool">(device.createDescriptorPoolUnique(pool_info));
+            const vk::DescriptorSetLayout set_layout = *state.layout;
+            const vk::DescriptorSetAllocateInfo alloc_info{
+                .descriptorPool = *state.pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &set_layout,
+            };
+            state.set = Check<"clamp set">(device.allocateDescriptorSets(alloc_info)).front();
+        }
+        if (state.bound != image->GetImage()) {
+            state.view = Check<"clamp view">(device.createImageViewUnique(
+                {.image = image->GetImage(),
+                 .viewType = vk::ImageViewType::e2D,
+                 .format = vk::Format::eR16G16B16A16Sfloat,
+                 .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
+            const vk::DescriptorImageInfo image_info{
+                .imageView = *state.view, .imageLayout = vk::ImageLayout::eGeneral};
+            const vk::WriteDescriptorSet write{.dstSet = state.set,
+                                               .dstBinding = 0,
+                                               .descriptorCount = 1,
+                                               .descriptorType = vk::DescriptorType::eStorageImage,
+                                               .pImageInfo = &image_info};
+            device.updateDescriptorSets(write, {});
+            state.bound = image->GetImage();
+        }
+        scheduler.EndRendering();
+        Transit(image, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
+        FlushBarriers();
+        const auto cmd = scheduler.CommandBuffer();
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *state.pipeline);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *state.pipeline_layout, 0,
+                               state.set, {});
+        const float exposure = [] {
+            const char* env = std::getenv("SHADPS4_CLAMP_EXPOSURE");
+            return env != nullptr ? std::stof(env) : 1.0f;
+        }();
+        const float max_value = [] {
+            const char* env = std::getenv("SHADPS4_CLAMP_MAX");
+            return env != nullptr ? std::stof(env) : 1.0f;
+        }();
+        const float threshold = [] {
+            const char* env = std::getenv("SHADPS4_CLAMP_THRESHOLD");
+            return env != nullptr ? std::stof(env) : 0.0f;
+        }();
+        const float params[3] = {max_value, exposure, threshold};
+        cmd.pushConstants(*state.pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0, 12,
+                          params);
+        const u32 w = image->info.size.width;
+        const u32 h = image->info.size.height;
+        cmd.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        Transit(image, vk::ImageLayout::eShaderReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eFragmentShader,
+                vk::AccessFlagBits2::eShaderRead);
+        FlushBarriers();
+        return;
+    }
+
     VkImageCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.imageType = VK_IMAGE_TYPE_2D;
